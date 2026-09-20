@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-Hant"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#ea580c"><title>網路客戶詢問統計</title>
+<link rel="manifest" href="manifest.webmanifest">
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f7f9;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC","Microsoft JhengHei",sans-serif}
+.app{max-width:760px;margin:auto;padding:18px}.hero{padding:22px;border-radius:24px;background:linear-gradient(135deg,#fff7ed,#fff);border:1px solid #fed7aa;box-shadow:0 10px 35px #0000000d}
+.brand{font-size:14px;font-weight:800;color:#ea580c}.title{font-size:28px;font-weight:900;margin:8px 0}.sub{color:#64748b;line-height:1.5}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px}.btn{border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:800}.primary{background:#ea580c;color:#fff}.secondary{background:#fff;border:1px solid #e5e7eb}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:16px;margin-top:14px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:#f8fafc;border-radius:14px;padding:14px}.num{font-size:26px;font-weight:900}.label{font-size:12px;color:#64748b;margin-top:3px}
+.status{padding:10px 12px;border-radius:12px;background:#fff7ed;color:#9a3412;font-size:13px;margin-top:12px}.list{max-height:440px;overflow:auto}.item{padding:13px 0;border-bottom:1px solid #eee}.item:last-child{border-bottom:0}.item b{font-size:15px}.meta{font-size:12px;color:#64748b;margin-top:4px}.q{font-size:13px;margin-top:7px;line-height:1.45}
+@media(max-width:520px){.actions{grid-template-columns:1fr}.title{font-size:25px}}
+</style></head><body><main class="app">
+<section class="hero"><div class="brand">VECTECH / 承邦有限公司</div><div class="title">網路客戶詢問統計</div><div class="sub">一鍵整理當月份 Outlook 網路客戶詢問，完成後直接匯出 Excel。</div>
+<div class="actions"><button id="run" class="btn primary">🔄 執行本月統計</button><button id="export" class="btn secondary">📊 匯出 Excel</button></div><div id="status" class="status">尚未執行</div></section>
+<section class="card"><div class="stats"><div class="stat"><div id="count" class="num">0</div><div class="label">本月詢問</div></div><div class="stat"><div id="companies" class="num">0</div><div class="label">不同公司</div></div><div class="stat"><div id="pending" class="num">0</div><div class="label">待處理</div></div></div></section>
+<section class="card"><b>本月客戶清單</b><div id="list" class="list"><div style="padding:25px;text-align:center;color:#94a3b8">按下執行本月統計</div></div></section>
+</main><script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script><script src="app.js"></script></body></html>
