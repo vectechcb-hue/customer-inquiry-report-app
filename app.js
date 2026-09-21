@@ -6,6 +6,7 @@ const AUTHORITY = "https://login.microsoftonline.com/consumers";
 const SCOPES = ["User.Read", "Mail.Read"];
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
+const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY = "vectech_auto_scan_after_login_v1";
 
 let msalAppInstance = null;
@@ -49,10 +50,16 @@ function loadManual(){
 function getLineApiUrl(){
   return safeText(localStorage.getItem(LINE_API_KEY) || byId("lineApiUrl")?.value).replace(/\/$/,"");
 }
+function getLineReadKey(){
+  return safeText(localStorage.getItem(LINE_READ_KEY) || byId("lineReadKey")?.value);
+}
 function saveLineApiUrl(){
   const v = getLineApiUrl();
+  const k = getLineReadKey();
   localStorage.setItem(LINE_API_KEY, v);
+  localStorage.setItem(LINE_READ_KEY, k);
   if (byId("lineApiUrl")) byId("lineApiUrl").value = v;
+  if (byId("lineReadKey")) byId("lineReadKey").value = k;
   return v;
 }
 function saveManual(){ localStorage.setItem(MANUAL_KEY, JSON.stringify(state.manualRows)); }
@@ -373,7 +380,10 @@ async function fetchLineRows(start, end){
   const base = getLineApiUrl();
   if (!base) return [];
   const url = base + "/messages?from=" + encodeURIComponent(start.toISOString()) + "&to=" + encodeURIComponent(end.toISOString());
-  const r = await fetch(url, { headers: { "Accept": "application/json" } });
+  const headers = { "Accept": "application/json" };
+  const key = getLineReadKey();
+  if (key) headers["X-API-Key"] = key;
+  const r = await fetch(url, { headers });
   if (!r.ok) {
     let detail = "";
     try { const j = await r.json(); detail = j?.error || j?.message || ""; } catch (_) {}
@@ -570,7 +580,9 @@ function exportExcel(){
 function setup(){
   loadManual();
   const lineApi = localStorage.getItem(LINE_API_KEY) || "";
+  const lineReadKey = localStorage.getItem(LINE_READ_KEY) || "";
   if (byId("lineApiUrl")) byId("lineApiUrl").value = lineApi;
+  if (byId("lineReadKey")) byId("lineReadKey").value = lineReadKey;
   byId("run").addEventListener("click", runScan);
   byId("export").addEventListener("click", exportExcel);
   byId("saveLineApi")?.addEventListener("click", () => {
@@ -583,7 +595,7 @@ function setup(){
       if (!base) throw new Error("請先輸入 LINE API 網址");
       const d = getStatDate(), s = new Date(d.getFullYear(),d.getMonth(),1), e = new Date(d.getFullYear(),d.getMonth()+1,1);
       const rows = await fetchLineRows(s,e);
-      byId("lineStatus").textContent = "連線成功：此月份目前取得 " + rows.length + " 筆";
+      byId("lineStatus").textContent = "連線成功：此月份目前取得 " + rows.length + " 筆 LINE 訊息";
     } catch(e) {
       byId("lineStatus").textContent = "連線失敗：" + e.message;
     }
