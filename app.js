@@ -21,15 +21,50 @@ function rowDateISO(s){const m=String(s||"").match(/(\d{4})[\/-](\d{1,2})[\/-](\
 function parseCustomer(raw,subject){
  const t=text(raw);
  const originalSubject=field(t,[/(?:原始)?主旨\s*[:：]?\s*([^\n]+)/i,/(?:Original )?Subject\s*[:：]?\s*([^\n]+)/i])||cleanSubject(subject);
- return {
-  company:field(t,[/公司名稱\s*[:：]?\s*([^\n]+)/i,/公司\s*[:：]?\s*([^\n]+)/i,/Company\s*[:：]?\s*([^\n]+)/i]),
-  name:field(t,[/姓名\s*[:：]?\s*([^\n]+)/i,/聯絡人\s*[:：]?\s*([^\n]+)/i,/Name\s*[:：]?\s*([^\n]+)/i]),
-  phone:field(t,[/聯絡電話\s*[:：]?\s*([^\n]+)/i,/公司電話\s*[:：]?\s*([^\n]+)/i,/電話\s*[:：]?\s*([^\n]+)/i,/Phone\s*[:：]?\s*([^\n]+)/i]),
-  email:field(t,[/Email\s*[:：]?\s*([^\s\n<>|]+)/i,/E-mail\s*[:：]?\s*([^\s\n<>|]+)/i]),
-  question:field(t,[/詢問內容\s*[:：]?\s*([\s\S]+?)(?=網站|Website|聯絡方式|$)/i,/留言\s*[:：]?\s*([\s\S]+?)(?=網站|Website|$)/i]),
-  originalSubject
- };
+ const stop="(?=\\s*(?:姓名|Name|地址|Address|聯絡電話|公司電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?)";
+ let company=field(t,[/公司名稱\s*[:：]?\s*([^\n]+)/i,/公司\s*[:：]?\s*([^\n]+)/i,/Company\s*[:：]?\s*([^\n]+)/i]);
+ let name=field(t,[/姓名\s*[:：]?\s*([^\n]+?)(?=\\s*(?:地址|Address|聯絡電話|公司電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?|$)/i,/聯絡人\s*[:：]?\s*([^\n]+)/i,/Name\s*[:：]?\s*([^\n]+)/i]);
+ let phone=field(t,[/聯絡電話\s*[:：]?\s*(.+?)(?=\\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?|$)/i,/公司電話\s*[:：]?\s*(.+?)(?=\\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?|$)/i,/電話\s*[:：]?\s*(.+?)(?=\\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?|$)/i,/Phone\s*[:：]?\s*(.+?)(?=\\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?|$)/i]);
+ let email=field(t,[/Email\s*[:：]?\s*([^\\s\\n<>|]+)/i,/E-mail\s*[:：]?\s*([^\\s\\n<>|]+)/i]);
+ let question=field(t,[/詢問內容\s*[:：]?\s*([\\s\\S]+?)(?=\\s*(?:網站|Website)\\s*[:：]?|$)/i,/留言\s*[:：]?\s*([\\s\\S]+?)(?=\\s*(?:網站|Website)\\s*[:：]?|$)/i]);
+
+ // Common VECTECH web-form format: "公司姓名:xxx地址:xxx聯絡電話:xxx Email:xxx Website:xxx詢問內容:xxx"
+ if(!name){
+  const m=t.match(/(?:^|\\n)\\s*(?:姓名|Name)\\s*[:：]?\\s*([^\\n]+?)(?=\\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：]?|$)/i);
+  if(m)name=m[1].trim();
+ }
+ if(!company){
+  const m=t.match(/^\\s*([^\\n]+?)\\s*(?=(?:姓名|Name)\\s*[:：])/i);
+  if(m)company=m[1].trim();
+ }
+ if(!question){
+  const m=t.match(/(?:詢問內容|留言)\\s*[:：]?\\s*([\\s\\S]+)$/i);
+  if(m)question=m[1].trim();
+ }
+ company=company.replace(/\\s*(?:姓名|Name)\\s*[:：].*$/i,"").trim();
+ name=name.replace(/\\s*(?:地址|Address)\\s*[:：].*$/i,"").trim();
+ phone=phone.replace(/\\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\\s*[:：].*$/i,"").trim();
+ email=email.replace(/[>，,。；;]+$/,"").trim();
+ question=question.replace(/\\s*(?:網站|Website)\\s*[:：]?.*$/is,"").trim();
+ return {company,name,phone,email,question,originalSubject};
 }
+
+const SALES_NAME_HINTS=["CHRIS","ALEX","ALAN","NEIL"];
+function extractSalesperson(raw){
+ const t=text(raw);
+ const head=t.split(/(?:-{3,}\\s*Original Message\\s*-{3,}|-{3,} Forwarded message -{3,}|On .* wrote:)/i)[0];
+ const hay=head+"\\n"+t.slice(0,1200);
+ const label=/業務人員|負責業務|業務|負責人|業務窗口|交由|請(?:.*)?處理|assigned(?: to)?|sales(?:person)?/i;
+ for(const name of SALES_NAME_HINTS){
+  const re=new RegExp("(?:業務人員|負責業務|業務|負責人|業務窗口|交由|請[^\\n]{0,12}處理|assigned(?:\\s+to)?|sales(?:person)?)\\s*[:：\\-]?\\s*"+name+"\\b","i");
+  if(re.test(hay))return name;
+ }
+ for(const name of SALES_NAME_HINTS){
+  if(new RegExp("\\b"+name+"\\b","i").test(head))return name;
+ }
+ return "";
+}
+
 function includeMail(m){
  const from=addr(m.from)||addr(m.sender);
  return from==="sales@cbtrade.com.tw"||String(m.subject||"").includes("聯絡我們");
@@ -91,7 +126,8 @@ function makeRow(c,meta={}){
   原始主旨:c.originalSubject||"",
   來源郵件:meta.source||"",
   處理狀態:meta.status||"待處理",
-  備註:meta.note||""
+  備註:meta.note||"",
+  業務人員:meta.sales||""
  };
 }
 function rowFromMail(m){
@@ -99,7 +135,8 @@ function rowFromMail(m){
  const embeddedDate=String(raw).match(/(?:Sent|寄件日期|發送時間)\s*[:：]?\s*([^\n]+)/i)?.[1]||"";
  const d=new Date(embeddedDate||m.receivedDateTime);
  const judge=aiJudge(m,c);
- return makeRow(c,{date:isNaN(d)?"":d.toISOString().slice(0,10),source:m.webLink||"",note:"AI判定："+judge.confidence+" / "+judge.score});
+ const salesperson=extractSalesperson(raw);
+ return makeRow(c,{date:isNaN(d)?"":d.toISOString().slice(0,10),source:m.webLink||"",note:"AI判定："+judge.confidence+" / "+judge.score,sales:salesperson});
 }
 function currentMonthRows(){const now=new Date();const ym=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");return state.manualRows.filter(r=>rowDateISO(r.日期).slice(0,7)===ym)}
 function setConnectorData(messages){
@@ -177,7 +214,7 @@ function parseManual(){
  document.getElementById("mName").value=c.name;
  document.getElementById("mEmail").value=c.email;
  document.getElementById("mPhone").value=c.phone;
- document.getElementById("mQuestion").value=c.question||raw.slice(0,1500);
+ document.getElementById("mQuestion").value=c.question||raw.slice(0,1500);\n const sales=extractSalesperson(raw);\n if(sales)document.getElementById("mSales").value=sales;
 }
 function addManual(){
  const c={
