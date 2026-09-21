@@ -5,6 +5,7 @@ const CLIENT_ID = "3b26a125-74f9-4ee5-a412-0a175899b7b2";
 const AUTHORITY = "https://login.microsoftonline.com/consumers";
 const SCOPES = ["User.Read", "Mail.Read"];
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
+const LINE_API_KEY = "vectech_line_api_url_v1";
 const AUTO_SCAN_KEY = "vectech_auto_scan_after_login_v1";
 
 let msalAppInstance = null;
@@ -44,6 +45,15 @@ function loadManual(){
     const x = JSON.parse(localStorage.getItem(MANUAL_KEY) || "[]");
     state.manualRows = Array.isArray(x) ? x : [];
   } catch (_) { state.manualRows = []; }
+}
+function getLineApiUrl(){
+  return safeText(localStorage.getItem(LINE_API_KEY) || byId("lineApiUrl")?.value).replace(/\/$/,"");
+}
+function saveLineApiUrl(){
+  const v = getLineApiUrl();
+  localStorage.setItem(LINE_API_KEY, v);
+  if (byId("lineApiUrl")) byId("lineApiUrl").value = v;
+  return v;
 }
 function saveManual(){ localStorage.setItem(MANUAL_KEY, JSON.stringify(state.manualRows)); }
 
@@ -182,6 +192,8 @@ function heuristicInquiry(m,c){
 function makeRow(c,meta={}){
   return {
     日期: isoDate(meta.date),
+    來源平台: meta.platform || "Outlook",
+    LINE用戶ID: meta.lineUserId || "",
     公司名稱: c.company || "",
     聯絡人: c.name || "",
     Email: c.email || "",
@@ -195,11 +207,12 @@ function makeRow(c,meta={}){
   };
 }
 function rowKey(r){
-  return [
-    safeText(r.Email).toLowerCase(),
-    cleanSubject(r.原始主旨).replace(/[\s　]+/g," ").toLowerCase(),
-    isoDate(r.日期)
-  ].join("|");
+  const email = safeText(r.Email).toLowerCase();
+  const lineUser = safeText(r.LINE用戶ID);
+  const platform = safeText(r.來源平台 || "Outlook");
+  const subject = cleanSubject(r.原始主旨).replace(/[\s　]+/g," ").toLowerCase();
+  const question = safeText(r.詢問內容).replace(/[\s　]+/g," ").toLowerCase();
+  return [platform, email || lineUser || safeText(r.聯絡人).toLowerCase(), subject || question.slice(0,160), isoDate(r.日期)].join("|");
 }
 function dedupe(rows){
   const map = new Map();
@@ -216,7 +229,8 @@ function mailToRow(m){
   return makeRow(c, {
     date: m.receivedDateTime || m.sentDateTime,
     source: m.webLink || "",
-    note: heuristicInquiry(m,c) ? "AI/規則判定：網路客戶詢問" : "AI/規則判定：需確認",
+    platform: "Outlook",
+    note: heuristicInquiry(m,c) ? "智慧/規則判定：網路客戶詢問" : "智慧/規則判定：需確認",
     sales: salesperson
   });
 }
@@ -247,6 +261,10 @@ function render(){
   byId("count").textContent = rows.length;
   byId("companies").textContent = new Set(rows.map(r => r.公司名稱).filter(Boolean)).size;
   byId("pending").textContent = rows.filter(r => r.處理狀態 === "待處理").length;
+  const op = rows.filter(r => (r.來源平台 || "Outlook") === "Outlook").length;
+  const lp = rows.filter(r => r.來源平台 === "LINE").length;
+  if (byId("outlookCount")) byId("outlookCount").textContent = op;
+  if (byId("lineCount")) byId("lineCount").textContent = lp;
   const ymText = formatYM(getStatYM());
   if (byId("countLabel")) byId("countLabel").textContent = ymText + "詢問";
   if (byId("listTitle")) byId("listTitle").textContent = ymText + "客戶清單";
@@ -325,7 +343,12 @@ async function runScan(){
     const select = "subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
     const inbox = GRAPH + "/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20" + from + "%20and%20receivedDateTime%20lt%20" + to + "&$top=100&$select=" + select + "&$orderby=receivedDateTime%20desc";
     const sent = GRAPH + "/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20" + from + "%20and%20sentDateTime%20lt%20" + to + "&$top=100&$select=" + select + "&$orderby=sentDateTime%20desc";
-    const [a,b] = await Promise.all([graphAll(inbox,tok), graphAll(sent,tok)]);
+    const linePromise = fetchLineRows(start, end).catch(e => {
+      console.warn(e);
+      updateStatus("Outlook 掃描中；LINE 暫時無法取得：" + e.message);
+      return [];
+    });
+    const [a,b,lineRows] = await Promise.all([graphAll(inbox,tok), graphAll(sent,tok), linePromise]);
     const scanned = [...a,...b]
       .filter(includeMail)
       .filter(m => !noiseMail(m))
@@ -336,14 +359,54 @@ async function runScan(){
         return mailToRow(m);
       })
       .filter(Boolean);
-    state.rows = dedupe([...selectedMonthRows(), ...scanned]);
+    state.rows = dedupe([...selectedMonthRows(), ...scanned, ...lineRows]);
     render();
-    updateStatus("完成：" + ymText + " 共整理 " + state.rows.length + " 筆網路客戶詢問");
+    const lineMsg = getLineApiUrl() ? "；LINE " + lineRows.length + " 筆" : "；LINE 尚未設定";
+    updateStatus("完成：" + ymText + " 共整理 " + state.rows.length + " 筆網路客戶詢問" + lineMsg);
   } catch (e) {
     console.error(e);
     updateStatus("掃描失敗：" + e.message);
     alert("Outlook 掃描失敗：\n" + e.message);
   }
+}
+async function fetchLineRows(start, end){
+  const base = getLineApiUrl();
+  if (!base) return [];
+  const url = base + "/messages?from=" + encodeURIComponent(start.toISOString()) + "&to=" + encodeURIComponent(end.toISOString());
+  const r = await fetch(url, { headers: { "Accept": "application/json" } });
+  if (!r.ok) {
+    let detail = "";
+    try { const j = await r.json(); detail = j?.error || j?.message || ""; } catch (_) {}
+    throw new Error("LINE API " + r.status + (detail ? " — " + detail : ""));
+  }
+  const j = await r.json();
+  return Array.isArray(j.events) ? j.events.map(lineEventToRow).filter(Boolean) : [];
+}
+function lineEventToRow(ev){
+  if (!ev) return null;
+  const text = safeText(ev.text);
+  const type = safeText(ev.messageType || ev.type || "text");
+  const name = safeText(ev.displayName);
+  const c = parseLineCustomer(text, name);
+  const pseudo = { subject: "LINE", from: null, sender: null, body: { content: text } };
+  if (!text && type !== "text") return makeRow({company:"",name,phone:"",email:"",question:"LINE " + type,originalSubject:"LINE"}, {
+    date: ev.timestamp, platform:"LINE", lineUserId:safeText(ev.userId),
+    source: safeText(ev.eventId), note:"LINE訊息：" + type
+  });
+  if (!heuristicInquiry(pseudo,c)) return null;
+  return makeRow(c, {
+    date: ev.timestamp, platform:"LINE", lineUserId:safeText(ev.userId),
+    source: safeText(ev.eventId), note:"LINE智慧/規則判定：網路客戶詢問", sales:safeText(ev.salesperson)
+  });
+}
+function parseLineCustomer(text, displayName){
+  const t = safeText(text);
+  const email = (t.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [""])[0];
+  const phone = (t.match(/(?:0\d{1,2}[-\s]?\d{6,8}(?:#\d{1,5})?|09\d{2}[-\s]?\d{3}[-\s]?\d{3})/) || [""])[0];
+  const company = (t.match(/(?:公司|公司名稱|公司名)\s*[:：]\s*([^\n]+)/i) || ["",""])[1].trim();
+  const name = (t.match(/(?:姓名|聯絡人|名字)\s*[:：]\s*([^\n]+)/i) || ["", displayName])[1].trim();
+  const question = (t.match(/(?:詢問內容|問題|需求|想詢問|請問)\s*[:：]?\s*([\s\S]+)/i) || ["",t])[1].trim();
+  return {company,name,phone,email,question,originalSubject:"LINE 網路客戶詢問"};
 }
 async function graphAll(url, tok){
   const out = [];
@@ -417,7 +480,7 @@ function addManual(){
     originalSubject: cleanSubject(byId("mSubject").value)
   };
   if (!c.company && !c.name && !c.question && !c.originalSubject) { alert("請先貼上郵件內容或填寫資料。"); return; }
-  const row = makeRow(c, { date: byId("mDate").value, source: "手動新增", status: "待處理", sales: safeText(byId("mSales").value), note: "手動新增" });
+  const row = makeRow(c, { date: byId("mDate").value, platform: safeText(byId("mPlatform")?.value || "Outlook"), source: "手動新增", status: "待處理", sales: safeText(byId("mSales").value), note: "手動新增" });
   row.是否成交 = byId("mWon").value;
   row.成交金額 = byId("mAmount").value;
   const key = rowKey(row);
@@ -453,9 +516,11 @@ function summarySheet(rows){
   const blank = rows.filter(r => !r.是否成交).length;
   const sales = new Map();
   const dates = new Map();
+  const platforms = new Map();
   for (const r of rows) {
     const sk = r.業務人員 || "未指定"; sales.set(sk,(sales.get(sk)||0)+1);
     const dk = isoDate(r.日期); dates.set(dk,(dates.get(dk)||0)+1);
+    const pk = r.來源平台 || "Outlook"; platforms.set(pk,(platforms.get(pk)||0)+1);
   }
   const data = [
     [ym],[],
@@ -469,7 +534,9 @@ function summarySheet(rows){
   entries.forEach(([k,v],i)=>{ const rr=3+i; if(!data[rr]) data[rr]=["","","","","","","",""]; data[rr][3]=k; data[rr][4]=v; });
   const dEntries=[...dates.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
   dEntries.forEach(([d,v],i)=>{ const rr=3+i; if(!data[rr]) data[rr]=["","","","","","","",""]; data[rr][6]=d; data[rr][7]=v; });
-  data.push(["說明","依最早提供的「網路客戶統計_Excel範本」格式輸出。公司名稱、聯絡人、公司電話、詢問內容已實際整理；業務人員僅在 ALAN 轉寄/回覆內容明確指定英文業務名稱時填入，否則留白。"]);
+  const pEntries=[...platforms.entries()];
+  pEntries.forEach(([p,v],i)=>{ const rr=3+i; if(!data[rr]) data[rr]=["","","","","","","",""]; data[rr][0]="來源平台："+p; data[rr][1]=v; });
+  data.push(["說明","保留原始 Excel 八欄明細格式；系統內部另外記錄來源平台，可在月份統計中查看 Outlook 與 LINE 的件數。"]);
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws["!merges"] = [{s:{c:0,r:0},e:{c:7,r:0}}];
   ws["!cols"] = [{wch:28},{wch:18},{wch:4},{wch:18},{wch:12},{wch:4},{wch:14},{wch:12}];
@@ -502,8 +569,25 @@ function exportExcel(){
 
 function setup(){
   loadManual();
+  const lineApi = localStorage.getItem(LINE_API_KEY) || "";
+  if (byId("lineApiUrl")) byId("lineApiUrl").value = lineApi;
   byId("run").addEventListener("click", runScan);
   byId("export").addEventListener("click", exportExcel);
+  byId("saveLineApi")?.addEventListener("click", () => {
+    saveLineApiUrl();
+    updateStatus(getLineApiUrl() ? "LINE API 已儲存，可執行選定月份統計測試。" : "LINE API 設定已清除。");
+  });
+  byId("testLineApi")?.addEventListener("click", async () => {
+    try {
+      const base = saveLineApiUrl();
+      if (!base) throw new Error("請先輸入 LINE API 網址");
+      const d = getStatDate(), s = new Date(d.getFullYear(),d.getMonth(),1), e = new Date(d.getFullYear(),d.getMonth()+1,1);
+      const rows = await fetchLineRows(s,e);
+      byId("lineStatus").textContent = "連線成功：此月份目前取得 " + rows.length + " 筆";
+    } catch(e) {
+      byId("lineStatus").textContent = "連線失敗：" + e.message;
+    }
+  });
   byId("connect").addEventListener("click", loginAndConnect);
   byId("manualOpen").addEventListener("click", openManual);
   byId("manualClose").addEventListener("click", closeManual);
