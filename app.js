@@ -81,7 +81,7 @@ function clientId(){return CLIENT_ID}
 function showSetup(){const x=document.getElementById("setup");if(x)x.hidden=false}
 function msalApp(){
  const id=clientId(); if(!id)return null;
- return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/common",redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
+ return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/"+TENANT_ID,redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
 }
 async function token(){
  const app=msalApp(); if(!app){showSetup();throw new Error("尚未設定 Microsoft Application ID")}
