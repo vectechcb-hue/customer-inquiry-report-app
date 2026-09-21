@@ -344,9 +344,40 @@ async function graphAll(url, tok){
 
 function openManual(){ byId("manualModal").classList.add("show"); byId("mDate").value = isoDate(new Date()); }
 function closeManual(){ byId("manualModal").classList.remove("show"); }
+async function ocrImages(files){
+  if (!window.Tesseract) throw new Error("OCR 元件尚未載入，請重新整理後再試一次");
+  const list = Array.from(files || []);
+  if (!list.length) return;
+  updateStatus("正在讀取照片並進行文字辨識…");
+  const parts = [];
+  for (let i = 0; i < list.length; i++) {
+    updateStatus("正在分析第 " + (i + 1) + "/" + list.length + " 張照片…");
+    const result = await Tesseract.recognize(list[i], "chi_tra+eng", {
+      logger: info => {
+        if (info?.status === "recognizing text" && Number.isFinite(info.progress)) {
+          updateStatus("照片文字辨識 " + Math.round(info.progress * 100) + "%…");
+        }
+      }
+    });
+    const text = safeText(result?.data?.text);
+    if (text) parts.push("【照片 " + (i + 1) + "】\\n" + text);
+  }
+  const existing = safeText(byId("mRaw").value);
+  byId("mRaw").value = (existing ? existing + "\\n\\n" : "") + parts.join("\\n\\n");
+  parseManual();
+  updateStatus("完成：已從照片辨識並整理欄位，請確認後加入統計。");
+}
+function extractDateFromRaw(raw){
+  const t = htmlToText(raw);
+  const m = t.match(/(\\d{4})\\s*[年./-]\\s*(\\d{1,2})\\s*[月./-]\\s*(\\d{1,2})\\s*(?:日)?/);
+  if (m) return m[1] + "-" + String(m[2]).padStart(2,"0") + "-" + String(m[3]).padStart(2,"0");
+  return "";
+}
 function parseManual(){
   const raw = safeText(byId("mRaw").value);
   const c = parseCustomer(raw, byId("mSubject").value);
+  const parsedDate = extractDateFromRaw(raw);
+  if (parsedDate) byId("mDate").value = parsedDate;
   byId("mSubject").value = c.originalSubject || byId("mSubject").value;
   byId("mCompany").value = c.company;
   byId("mName").value = c.name;
@@ -445,6 +476,7 @@ function setup(){
   byId("manualOpen").addEventListener("click", openManual);
   byId("manualClose").addEventListener("click", closeManual);
   byId("parseManual").addEventListener("click", parseManual);
+  byId("mImages").addEventListener("change", e => ocrImages(e.target.files).catch(err => { console.error(err); updateStatus("照片分析失敗：" + err.message); alert("照片分析失敗：\n" + err.message); }));
   byId("addManual").addEventListener("click", addManual);
   render();
   updateStatus("正在準備 Outlook 連線…");
