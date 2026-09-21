@@ -1,6 +1,6 @@
 const state={rows:[]};
 const GRAPH="https://graph.microsoft.com/v1.0";
-const CLIENT_ID="0a996912-7b43-4801-bcc8-ead9c3d03396";
+const CLIENT_ID="3b26a125-74f9-4ee5-a412-0a175899b7b2";
 const SCOPES=["User.Read","Mail.Read"];
 
 function text(v){
@@ -80,7 +80,7 @@ function clientId(){return CLIENT_ID}
 function showSetup(){const x=document.getElementById("setup");if(x)x.hidden=false}
 function msalApp(){
  const id=clientId(); if(!id)return null;
- return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/common",redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
+ return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/consumers",redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
 }
 async function token(){
  const app=msalApp(); if(!app){showSetup();throw new Error("尚未設定 Microsoft Application ID")}
