@@ -50,22 +50,41 @@ function parseCustomer(raw,subject){
 }
 
 const SALES_NAME_HINTS=["CHRIS","ALEX","ALAN","NEIL"];
-function extractSalesperson(raw){
+function extractAlanBlocks(raw){
  const t=text(raw);
- const head=t.split(/(?:-{3,}\\s*Original Message\\s*-{3,}|-{3,} Forwarded message -{3,}|On .* wrote:)/i)[0];
- const hay=head+"\\n"+t.slice(0,1200);
- const label=/業務人員|負責業務|業務|負責人|業務窗口|交由|請(?:.*)?處理|assigned(?: to)?|sales(?:person)?/i;
- for(const name of SALES_NAME_HINTS){
-  const re=new RegExp("(?:業務人員|負責業務|業務|負責人|業務窗口|交由|請[^\\n]{0,12}處理|assigned(?:\\s+to)?|sales(?:person)?)\\s*[:：\\-]?\\s*"+name+"\\b","i");
-  if(re.test(hay))return name;
+ const lines=t.split("\n");
+ const blocks=[];
+ let current=null;
+ for(const line of lines){
+  const h=line.match(/^\\s*(?:From|寄件者)\\s*[:：]?\\s*(.*)$/i);
+  if(h){
+   if(current)blocks.push(current);
+   const header=h[1];
+   const isAlan=/alan(?:\\.tw)?|alan@cbtrade\\.com\\.tw|承邦\\/經理|承邦-?經理/i.test(header);
+   current={isAlan,text:header+"\\n"};
+  }else if(current){
+   current.text+=line+"\\n";
+  }
  }
- for(const name of SALES_NAME_HINTS){
-  if(new RegExp("\\b"+name+"\\b","i").test(head))return name;
- }
- const generic=head.match(/(?:業務人員|負責業務|負責人|assigned\\s+to|salesperson)\\s*[:：\\-]\\s*([A-Z][A-Z0-9._-]{2,20})\\b/i);
- return generic?.[1] ? generic[1].toUpperCase() : "";
+ if(current)blocks.push(current);
+ return blocks.filter(b=>b.isAlan);
 }
-
+function extractSalesperson(raw){
+ const alanBlocks=extractAlanBlocks(raw);
+ if(!alanBlocks.length)return "";
+ const targets=alanBlocks.map(b=>b.text).join("\n");
+ const assignmentPatterns=[
+  /(?:指定|指派|交由|轉交|請|麻煩|請由|由)\\s*(?:業務|負責人|窗口)?\\s*[:：\\-]??\\s*(CHRIS|ALEX|NEIL|ALAN)\\b/i,
+  /(?:請|麻煩|幫忙|協助)[^\\n]{0,20}\\b(CHRIS|ALEX|NEIL|ALAN)\\b[^\\n]{0,20}(?:處理|跟進|追蹤|聯繫|聯絡|負責)/i,
+  /\\b(CHRIS|ALEX|NEIL|ALAN)\\b[^\\n]{0,20}(?:處理|跟進|追蹤|聯繫|聯絡|負責)/i,
+  /(?:處理|跟進|追蹤|聯繫|聯絡|負責)[^\\n]{0,20}\\b(CHRIS|ALEX|NEIL|ALAN)\\b/i
+ ];
+ for(const re of assignmentPatterns){
+  const m=targets.match(re);
+  if(m&&m[1])return m[1].toUpperCase();
+ }
+ return "";
+}
 function includeMail(m){
  const from=addr(m.from)||addr(m.sender);
  return from==="sales@cbtrade.com.tw"||String(m.subject||"").includes("聯絡我們");
@@ -254,9 +273,9 @@ function buildDetailSheet(rows){
  const data=[headers,...rows.map(r=>[excelDate(r.日期),r.公司名稱||"",r.聯絡人||"",r.電話||"",r.詢問內容||"",r.業務人員||"",r.是否成交||"",r.成交金額?Number(r.成交金額):""])];
  const ws=XLSX.utils.aoa_to_sheet(data);
  ws["!cols"]=[{wch:12},{wch:24},{wch:18},{wch:20},{wch:70},{wch:14},{wch:12},{wch:14}];
- ws["!rows"]=[{hpt:24},...rows.map(r=>({hpt:42}))];
+ ws["!rows"]=[{hpt:24},...rows.map(r=>({hpt:60}))];
  ws["!autofilter"]={ref:"A1:H"+data.length};
- const end=data.length;styleSheet(ws,"A1:H"+end);
+ const end=data.length;styleSheet(ws,"A1:H"+end);\n ws["!autofilter"]={ref:"A1:H"+end};
  for(let i=1;i<end;i++){const cell=ws["A"+(i+1)];if(cell)cell.z="yyyy/m/d"}
  return ws;
 }
