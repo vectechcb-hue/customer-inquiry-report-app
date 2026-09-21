@@ -69,8 +69,12 @@ function extractAlanBlocks(raw){
  if(current)blocks.push(current);
  return blocks.filter(b=>b.isAlan);
 }
-function extractSalesperson(raw){
+function extractSalesperson(raw,mailMeta={}){
+ const outerFrom=addr(mailMeta.from)||addr(mailMeta.sender);
+ const rawText=text(raw);
+ const isAlanOuter=/alan@cbtrade\\.com\\.tw|\\balan\\b|承邦\\/經理|承邦-?經理/i.test(outerFrom)||/承邦\\/經理|承邦-?經理/i.test(String(mailMeta.from?.emailAddress?.name||mailMeta.sender?.emailAddress?.name||""));
  const alanBlocks=extractAlanBlocks(raw);
+ if(isAlanOuter && rawText){alanBlocks.push({isAlan:true,text:rawText});}
  if(!alanBlocks.length)return "";
  const targets=alanBlocks.map(b=>b.text).join("\n");
  const assignmentPatterns=[
@@ -155,7 +159,7 @@ function rowFromMail(m){
  const embeddedDate=String(raw).match(/(?:Sent|寄件日期|發送時間)\s*[:：]?\s*([^\n]+)/i)?.[1]||"";
  const d=new Date(embeddedDate||m.receivedDateTime);
  const judge=aiJudge(m,c);
- const salesperson=extractSalesperson(raw);
+ const salesperson=extractSalesperson(raw,m);
  return makeRow(c,{date:isNaN(d)?"":d.toISOString().slice(0,10),source:m.webLink||"",note:"AI判定："+judge.confidence+" / "+judge.score,sales:salesperson});
 }
 function currentMonthRows(){const now=new Date();const ym=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");return state.manualRows.filter(r=>rowDateISO(r.日期).slice(0,7)===ym)}
@@ -273,7 +277,7 @@ function buildDetailSheet(rows){
  const data=[headers,...rows.map(r=>[excelDate(r.日期),r.公司名稱||"",r.聯絡人||"",r.電話||"",r.詢問內容||"",r.業務人員||"",r.是否成交||"",r.成交金額?Number(r.成交金額):""])];
  const ws=XLSX.utils.aoa_to_sheet(data);
  ws["!cols"]=[{wch:12},{wch:24},{wch:18},{wch:20},{wch:70},{wch:14},{wch:12},{wch:14}];
- ws["!rows"]=[{hpt:24},...rows.map(r=>({hpt:60}))];
+ ws["!rows"]=[{hpt:24},...rows.map(r=>({hpt:Math.min(210, Math.max(60, 42 + Math.ceil(String(r.詢問內容||"").length/55)*18)}))];
  ws["!autofilter"]={ref:"A1:H"+data.length};
  const end=data.length;styleSheet(ws,"A1:H"+end);\n ws["!autofilter"]={ref:"A1:H"+end};
  for(let i=1;i<end;i++){const cell=ws["A"+(i+1)];if(cell)cell.z="yyyy/m/d"}
