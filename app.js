@@ -101,6 +101,7 @@ function rowFromMail(m){
  const judge=aiJudge(m,c);
  return makeRow(c,{date:isNaN(d)?"":d.toISOString().slice(0,10),source:m.webLink||"",note:"AI判定："+judge.confidence+" / "+judge.score});
 }
+function currentMonthRows(){const now=new Date();const ym=now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");return state.manualRows.filter(r=>rowDateISO(r.日期).slice(0,7)===ym)}
 function setConnectorData(messages){
  const scanned=messages.filter(includeMail).filter(m=>!noiseMail(m)).map(m=>{
   const raw=m.body?.content||m.bodyPreview||"", c=parseCustomer(raw,m.subject);
@@ -108,7 +109,7 @@ function setConnectorData(messages){
   const judge=aiJudge(m,c);
   return judge.isInquiry?rowFromMail(m):null;
  }).filter(Boolean);
- state.rows=dedupe([...state.manualRows,...scanned]);
+ state.rows=dedupe([...currentMonthRows(),...scanned]);
  render();
 }
 function render(){
@@ -238,6 +239,7 @@ function buildSummarySheet(rows){
  // rebuild date section from current rows into columns G:H
  const dateEntries=[...dateMap.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
  dateEntries.forEach(([,v],idx)=>{const rowIdx=3+idx;if(!data[rowIdx])data[rowIdx]=["","","","","","","",""];data[rowIdx][6]=excelDate(dateEntries[idx][0]);data[rowIdx][7]=v});
+ const noteRow=data.length+1;data.push(["說明","本檔依最早提供的「網路客戶統計_Excel範本」版型輸出；資料可由 Outlook 掃描或手動增加，並自動去重。"]);
  const ws=XLSX.utils.aoa_to_sheet(data);
  ws["!merges"]=[{s:{c:0,r:0},e:{c:7,r:0}}];
  ws["!cols"]=[{wch:28},{wch:14},{wch:4},{wch:18},{wch:12},{wch:4},{wch:14},{wch:12}];
@@ -245,7 +247,10 @@ function buildSummarySheet(rows){
  for(let r=3;r<data.length;r++)ws["!rows"].push({hpt:21});
  styleSheet(ws,"A3:H"+data.length);
  const title=ws["A1"];if(title)title.s={font:{name:"Microsoft JhengHei",bold:true,sz:18},alignment:{vertical:"center"}};
- for(let r=4;r<=data.length;r++){const cell=ws["G"+r];if(cell)cell.z="yyyy/m/d"}
+ for(let r=4;r<data.length;r++){const cell=ws["G"+r];if(cell)cell.z="yyyy/m/d"}
+ const n=ws["A"+noteRow];if(n)n.s={font:{name:"Microsoft JhengHei",bold:true},alignment:{vertical:"top",wrap_text:true}};
+ if(ws["B"+noteRow])ws["B"+noteRow].s={font:{name:"Microsoft JhengHei"},alignment:{vertical:"top",wrap_text:true}};
+ ws["!rows"][noteRow-1]={hpt:36};
  return ws;
 }
 function exportExcel(){
