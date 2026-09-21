@@ -426,12 +426,19 @@ function setup(){
   authReadyPromise = initAuth()
     .then(() => {
       const acct = msalAppInstance.getActiveAccount();
-      updateStatus(acct ? "Outlook 已登入，可開始掃描本月郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
+      const justLoggedIn = new URLSearchParams(location.search).get("auth") === "1";
+      if (acct && justLoggedIn) {
+        history.replaceState({}, document.title, location.pathname);
+        updateStatus("Outlook 登入成功，正在自動掃描本月郵件…");
+        setTimeout(runScan, 200);
+      } else {
+        updateStatus(acct ? "Outlook 已登入，可開始掃描本月郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
+      }
     })
     .catch(e => {
       console.error(e);
       updateStatus("Outlook 登入元件載入失敗：" + e.message);
-      const b = byId("connect"); if (b) b.disabled = false;
+      const b = byId("connect"); if (b) b.style.pointerEvents = "auto";
     });
 }
 window.connectOutlook = loginAndConnect;
