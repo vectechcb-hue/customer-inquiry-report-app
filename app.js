@@ -114,7 +114,32 @@ function extractSalesperson(raw, mailMeta = {}){
   }
   if (active && current) targets.push(current);
   if (outerLooksAlan && t) targets.push(t);
-  if (!targets.length) return "";
+  // 支援 ALAN 最新回覆以「ALEX:」單獨一行指定業務，下一行才寫處理指示。
+  if (outerLooksAlan) {
+    const allLines = t.split("\n").map(x => x.trim());
+    const actionWords = /(?:聯絡|聯繫|連絡|訪|拜訪|處理|跟進|追蹤|回覆|報價|負責|接洽)/i;
+    for (let i = 0; i < allLines.length; i++) {
+      const line = allLines[i].replace(/^>+\s*/, "");
+      const m = line.match(/^(CHRIS|ALEX|NEIL|ALAN)\s*[:：]?\s*$/i);
+      if (!m) continue;
+      for (let j = i + 1; j < Math.min(allLines.length, i + 4); j++) {
+        if (actionWords.test(allLines[j])) return m[1].toUpperCase();
+      }
+    }
+  }
+
+  // 支援「ALEX: 聯絡客戶」、「麻煩 ALEX 處理」這類同一行指派。
+  const assignmentPatterns = [
+    /\b(CHRIS|ALEX|NEIL|ALAN)\b\s*[:：-]?\s*(?:請|麻煩|幫忙|協助)?[^\n]{0,50}(?:聯絡|聯繫|連絡|訪|拜訪|處理|跟進|追蹤|回覆|報價|負責|接洽)/i,
+    /(?:請|麻煩|幫忙|協助)[^\n]{0,30}\b(CHRIS|ALEX|NEIL|ALAN)\b[^\n]{0,40}(?:聯絡|聯繫|連絡|訪|拜訪|處理|跟進|追蹤|回覆|報價|負責|接洽)/i
+  ];
+  for (const hay of targets) {
+    for (const re of assignmentPatterns) {
+      const m = hay.match(re);
+      if (m?.[1]) return m[1].toUpperCase();
+    }
+  }
+    if (!targets.length) return "";
 
   const hay = targets.join("\n");
   const patterns = [
