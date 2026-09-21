@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hant"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#ea580c"><meta name="app-build" content="2026-09-21-v26"><title>網路客戶詢問統計</title>
+<meta name="theme-color" content="#ea580c"><meta name="app-build" content="2026-09-21-v27"><title>網路客戶詢問統計</title>
 <link rel="manifest" href="manifest.webmanifest">
 <style>
 *{box-sizing:border-box}body{margin:0;background:#f6f7f9;color:#1f2937;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC","Microsoft JhengHei",sans-serif}
@@ -24,7 +24,7 @@
  <div class="modal-card">
   <div class="modal-top"><div><div style="font-size:20px;font-weight:900">手動增加郵件</div><div class="note">可以直接貼上整封 Email，先解析，再檢查資料後加入統計；也可以直接填欄位。</div></div><button id="manualClose" class="close">✕</button></div>
   <div class="form-grid" style="margin-top:14px">
-   <div class="field full"><label>郵件全文／原始內容</label><textarea id="mRaw" placeholder="可直接貼上 Outlook 郵件內容，例如 From、Subject、公司名稱、聯絡人、詢問內容等"></textarea></div>
+   <div class="field full"><label>郵件照片／原始內容</label><input id="mImages" type="file" accept="image/*" multiple><div class="note">可直接上傳 Outlook 郵件截圖（可一次多張）。系統會先做照片文字辨識，再自動整理日期、公司名稱、聯絡人、Email、電話、詢問內容；辨識後請快速確認再加入統計。</div><textarea id="mRaw" placeholder="也可以直接貼上 Outlook 郵件內容，例如 From、Subject、公司名稱、聯絡人、詢問內容等"></textarea></div>
    <div class="field"><label>日期</label><input id="mDate" type="date"></div>
    <div class="field"><label>原始主旨</label><input id="mSubject" placeholder="例如：CB-991D 報價詢問"></div>
    <div class="field"><label>公司名稱</label><input id="mCompany"></div>
@@ -42,4 +42,5 @@
 
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
-<script src="app.js?v=20260921v26"></script></body></html>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="app.js?v=20260921v27"></script></body></html>
