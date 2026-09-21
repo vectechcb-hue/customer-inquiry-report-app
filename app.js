@@ -220,9 +220,24 @@ function mailToRow(m){
     sales: salesperson
   });
 }
-function currentMonthRows(){
-  const now = new Date();
-  const ym = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
+function getStatDate(){
+  const v = safeText(byId("statDate")?.value);
+  if (v) {
+    const d = new Date(v + "T12:00:00");
+    if (!isNaN(d)) return d;
+  }
+  return new Date();
+}
+function getStatYM(){
+  const d = getStatDate();
+  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+}
+function formatYM(ym){
+  const [y,m] = ym.split("-");
+  return y + "年" + m + "月";
+}
+function selectedMonthRows(){
+  const ym = getStatYM();
   return state.manualRows.filter(r => isoDate(r.日期).slice(0,7) === ym);
 }
 
@@ -232,6 +247,9 @@ function render(){
   byId("count").textContent = rows.length;
   byId("companies").textContent = new Set(rows.map(r => r.公司名稱).filter(Boolean)).size;
   byId("pending").textContent = rows.filter(r => r.處理狀態 === "待處理").length;
+  const ymText = formatYM(getStatYM());
+  if (byId("countLabel")) byId("countLabel").textContent = ymText + "詢問";
+  if (byId("listTitle")) byId("listTitle").textContent = ymText + "客戶清單";
   const list = byId("list");
   if (!rows.length) {
     list.innerHTML = '<div style="padding:25px;text-align:center;color:#94a3b8">目前沒有資料</div>';
@@ -297,14 +315,16 @@ async function runScan(){
   try {
     const tok = await getToken();
     if (!tok) return;
-    updateStatus("已登入，正在掃描本月 Outlook…");
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const stat = getStatDate();
+    const start = new Date(stat.getFullYear(), stat.getMonth(), 1);
+    const end = new Date(stat.getFullYear(), stat.getMonth() + 1, 1);
+    const ymText = formatYM(getStatYM());
+    updateStatus("已登入，正在掃描 " + ymText + " Outlook 網路客戶郵件…");
     const from = encodeURIComponent(start.toISOString());
-    const to = encodeURIComponent(now.toISOString());
+    const to = encodeURIComponent(end.toISOString());
     const select = "subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
-    const inbox = GRAPH + "/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20" + from + "%20and%20receivedDateTime%20le%20" + to + "&$top=100&$select=" + select + "&$orderby=receivedDateTime%20desc";
-    const sent = GRAPH + "/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20" + from + "%20and%20sentDateTime%20le%20" + to + "&$top=100&$select=" + select + "&$orderby=sentDateTime%20desc";
+    const inbox = GRAPH + "/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20" + from + "%20and%20receivedDateTime%20lt%20" + to + "&$top=100&$select=" + select + "&$orderby=receivedDateTime%20desc";
+    const sent = GRAPH + "/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20" + from + "%20and%20sentDateTime%20lt%20" + to + "&$top=100&$select=" + select + "&$orderby=sentDateTime%20desc";
     const [a,b] = await Promise.all([graphAll(inbox,tok), graphAll(sent,tok)]);
     const scanned = [...a,...b]
       .filter(includeMail)
@@ -316,9 +336,9 @@ async function runScan(){
         return mailToRow(m);
       })
       .filter(Boolean);
-    state.rows = dedupe([...currentMonthRows(), ...scanned]);
+    state.rows = dedupe([...selectedMonthRows(), ...scanned]);
     render();
-    updateStatus("完成：本月共整理 " + state.rows.length + " 筆網路客戶詢問");
+    updateStatus("完成：" + ymText + " 共整理 " + state.rows.length + " 筆網路客戶詢問");
   } catch (e) {
     console.error(e);
     updateStatus("掃描失敗：" + e.message);
@@ -427,8 +447,7 @@ function xlsxSheet(rows){
   return ws;
 }
 function summarySheet(rows){
-  const now = new Date();
-  const ym = now.getFullYear() + "年" + String(now.getMonth()+1).padStart(2,"0") + "月 網路客戶統計";
+  const ym = formatYM(getStatYM()) + " 網路客戶統計";
   const won = rows.filter(r => r.是否成交 === "是").length;
   const amount = rows.reduce((s,r) => s + (Number(r.成交金額) || 0), 0);
   const blank = rows.filter(r => !r.是否成交).length;
@@ -454,7 +473,20 @@ function summarySheet(rows){
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws["!merges"] = [{s:{c:0,r:0},e:{c:7,r:0}}];
   ws["!cols"] = [{wch:28},{wch:18},{wch:4},{wch:18},{wch:12},{wch:4},{wch:14},{wch:12}];
-  ws["!rows"] = [{hpt:28},{hpt:8},{hpt:24},...data.slice(3).map(()=>({hpt:22}))];
+  ws["!rows"] = [{hpt:28},{hpt:8},{hpt:24},...data.slice(3).map((row)=>({ hpt: row.some(v => safeText(v).length > 70) ? 42 : 22 }))];
+  const used = ws["!ref"] || "A1:H" + data.length;
+  const rng = XLSX.utils.decode_range(used);
+  for (let r = rng.s.r; r <= rng.e.r; r++) {
+    for (let c = rng.s.c; c <= rng.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({r,c})];
+      if (!cell) continue;
+      cell.s = {
+        font:{name:"Microsoft JhengHei"},
+        alignment:{vertical:"top",wrap_text:true},
+        border:{top:{style:"thin",color:{rgb:"D5DDE3"}},bottom:{style:"thin",color:{rgb:"D5DDE3"}},left:{style:"thin",color:{rgb:"D5DDE3"}},right:{style:"thin",color:{rgb:"D5DDE3"}}}
+      };
+    }
+  }
   return ws;
 }
 function exportExcel(){
@@ -462,8 +494,8 @@ function exportExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, xlsxSheet(state.rows), "網路客戶明細");
   XLSX.utils.book_append_sheet(wb, summarySheet(state.rows), "月份統計");
-  const d = new Date();
-  const fn = "網路客戶統計_" + d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + ".xlsx";
+  const ym = getStatYM();
+  const fn = "網路客戶統計_" + ym + ".xlsx";
   XLSX.writeFile(wb, fn, {compression:true});
   updateStatus("已匯出：" + fn);
 }
@@ -475,8 +507,18 @@ function setup(){
   byId("connect").addEventListener("click", loginAndConnect);
   byId("manualOpen").addEventListener("click", openManual);
   byId("manualClose").addEventListener("click", closeManual);
+  byId("statDate")?.addEventListener("change", render);
   byId("parseManual").addEventListener("click", parseManual);
   byId("mImages").addEventListener("change", e => ocrImages(e.target.files).catch(err => { console.error(err); updateStatus("照片分析失敗：" + err.message); alert("照片分析失敗：\n" + err.message); }));
+  const statDate = byId("statDate");
+  if (statDate) {
+    statDate.value = isoDate(new Date());
+    statDate.addEventListener("change", () => {
+      state.rows = selectedMonthRows();
+      render();
+      updateStatus("已切換至 " + formatYM(getStatYM()) + "，按「執行選定月份統計」開始掃描。");
+    });
+  }
   byId("addManual").addEventListener("click", addManual);
   render();
   updateStatus("正在準備 Outlook 連線…");
