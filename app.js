@@ -81,7 +81,7 @@ function clientId(){return CLIENT_ID}
 function showSetup(){const x=document.getElementById("setup");if(x)x.hidden=false}
 function msalApp(){
  const id=clientId(); if(!id)return null;
- return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/"+TENANT_ID,redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
+ return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/common",redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
 }
 async function token(){
  const app=msalApp(); if(!app){showSetup();throw new Error("尚未設定 Microsoft Application ID")}
@@ -96,7 +96,7 @@ async function token(){
   account=login.account; if(account)app.setActiveAccount(account);
  }
  try{
-  const t=await app.acquireTokenSilent({account,scopes:SCOPES});
+  const t=await app.acquireTokenSilent({account,scopes:SCOPES,forceRefresh:true});
   return t.accessToken;
  }catch(e){
   console.warn("silent token failed",e);
@@ -126,7 +126,7 @@ async function run(){
  const s=document.getElementById("status");s.textContent="正在重新驗證 Outlook 權限…";
  try{
   const tok=await token();if(!tok)return;
-  s.textContent="已登入，正在驗證 Microsoft Graph…";
+  s.textContent="已登入，正在重新取得 Outlook 權限…";
   const me=await fetch(GRAPH+"/me?$select=mail,userPrincipalName,displayName",{headers:{Authorization:"Bearer "+tok}});
   if(!me.ok){let detail="";try{const e=await me.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Graph 驗證 "+me.status+(detail?" — "+detail:""))}
   s.textContent="Graph 驗證成功，正在掃描本月郵件…";
