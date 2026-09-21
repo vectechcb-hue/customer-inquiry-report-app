@@ -215,7 +215,9 @@ function parseManual(){
  document.getElementById("mName").value=c.name;
  document.getElementById("mEmail").value=c.email;
  document.getElementById("mPhone").value=c.phone;
- document.getElementById("mQuestion").value=c.question||raw.slice(0,1500);\n const sales=extractSalesperson(raw);\n if(sales)document.getElementById("mSales").value=sales;
+ document.getElementById("mQuestion").value=c.question||raw.slice(0,1500);
+ const sales=extractSalesperson(raw);
+ if(sales)document.getElementById("mSales").value=sales;
 }
 function addManual(){
  const c={
