@@ -279,7 +279,8 @@ function buildDetailSheet(rows){
  ws["!cols"]=[{wch:12},{wch:24},{wch:18},{wch:20},{wch:70},{wch:14},{wch:12},{wch:14}];
  ws["!rows"]=[{hpt:24},...rows.map(r=>({hpt:Math.min(210, Math.max(60, 42 + Math.ceil(String(r.詢問內容||"").length/55)*18)}))];
  ws["!autofilter"]={ref:"A1:H"+data.length};
- const end=data.length;styleSheet(ws,"A1:H"+end);\n ws["!autofilter"]={ref:"A1:H"+end};
+ const end=data.length;styleSheet(ws,"A1:H"+end);
+ ws["!autofilter"]={ref:"A1:H"+end};
  for(let i=1;i<end;i++){const cell=ws["A"+(i+1)];if(cell)cell.z="yyyy/m/d"}
  return ws;
 }
