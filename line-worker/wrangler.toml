@@ -1,1 +1,8 @@
-name = "vectech-line-customer-api"\nmain = "worker.js"\ncompatibility_date = "2026-09-21"\n\n# 請在 Cloudflare Dashboard 建立 D1 後填入 database_id\n[[d1_databases]]\nbinding = "DB"\ndatabase_name = "vectech-line-customer-db"\ndatabase_id = "59f6183e-a182-42f3-a49d-704b1df09dd0"\n
+name = "vectech-line-customer-api"
+main = "worker.js"
+compatibility_date = "2026-09-21"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "vectech-line-customer-db"
+database_id = "59f6183e-a182-42f3-a49d-704b1df09dd0"
