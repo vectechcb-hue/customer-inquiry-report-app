@@ -28,8 +28,7 @@ function parseCustomer(raw,subject){
 
 function includeMail(m){
  const from=addr(m.from)||addr(m.sender);
- const tos=[...(m.toRecipients||[]),...(m.ccRecipients||[])].map(addr);
- return from==="sales@cbtrade.com.tw"||tos.includes("sales@cbtrade.com.tw")||String(m.subject||"").includes("聯絡我們");
+ return from==="sales@cbtrade.com.tw"||String(m.subject||"").includes("聯絡我們");
 }
 function noiseMail(m){
  const s=((m.subject||"")+" "+text(m.body?.content||m.bodyPreview||"")).toLowerCase();
@@ -51,20 +50,52 @@ function flatten(m){
  const c=parseCustomer(raw,m.subject);
  const embeddedDate=String(raw).match(/(?:Sent|寄件日期|發送時間)\s*[:：]?\s*([^\n]+)/i)?.[1]||"";
  const d=new Date(embeddedDate||m.receivedDateTime);
- return {日期:isNaN(d)?"":d.toLocaleDateString("zh-TW"),公司名稱:c.company,聯絡人:c.name,Email:c.email,電話:c.phone,詢問內容:c.question||text(raw).slice(0,500),原始主旨:c.originalSubject,來源郵件:m.webLink||"",處理狀態:"待處理",備註:""};
+ const judge=aiJudge(m,c);
+ return {日期:isNaN(d)?"":d.toLocaleDateString("zh-TW"),公司名稱:c.company,聯絡人:c.name,Email:c.email,電話:c.phone,詢問內容:c.question||text(raw).slice(0,500),原始主旨:c.originalSubject,來源郵件:m.webLink||"",處理狀態:"待處理",備註:"AI判定："+judge.confidence+" / "+judge.score};
 }
+function aiJudge(m,c){
+ const raw=text(m.body?.content||m.bodyPreview||"");
+ const s=(String(m.subject||"")+"\n"+raw).toLowerCase();
+ let score=0;
+ const positive=[
+  "聯絡我們","詢價","報價","價格","多少錢","購買","採購","需求","詢問","請問","規格","交期",
+  "產品","設備","機台","焊接","返修","bga","solder","quotation","quote","inquiry","purchase",
+  "price","availability","lead time","interested"
+ ];
+ const negative=[
+  "簽核","內部","內部信件","工作報告","日報","週報","月報","出貨通知","維修完成","測試報告",
+  "退訂","newsletter","promotion","促銷","廣告","marketing","mailer-daemon","delivery status notification"
+ ];
+ for(const k of positive)if(s.includes(k.toLowerCase()))score+=2;
+ for(const k of negative)if(s.includes(k.toLowerCase()))score-=3;
+ const customerEmail=(c.email||"").toLowerCase();
+ const directFrom=addr(m.from)||addr(m.sender);
+ const externalFrom=directFrom && !/@(cbtrade\\.com\\.tw|msa\\.hinet\\.net|ms39\\.hinet\\.net)$/i.test(directFrom);
+ if(customerEmail && !/@(cbtrade\\.com\\.tw|msa\\.hinet\\.net|ms39\\.hinet\\.net)$/i.test(customerEmail))score+=3;
+ if(externalFrom && directFrom!=="sales@cbtrade.com.tw")score+=2;
+ if(c.company||c.name||c.phone)score+=2;
+ if((c.question||"").length>10)score+=2;
+ const isInquiry=score>=4 && !isInternalOnly(m,c);
+ return {isInquiry,score,confidence:score>=8?"高":score>=5?"中":"低"};
+}
+function normalizeEmail(v){return String(v||"").trim().toLowerCase()}
+function normalizeSubject(v){return cleanSubject(v).replace(/[\\s　]+/g," ").trim().toLowerCase()}
+function normalizeDate(v){return String(v||"").replace(/[\\s]/g,"")}
 function dedupe(rows){
  const map=new Map();
  for(const r of rows){
-  const key=[(r.Email||"").toLowerCase(),r.原始主旨,r.日期].join("|");
-  if(!map.has(key))map.set(key,r);
+  const key=[normalizeEmail(r.Email),normalizeSubject(r.原始主旨),normalizeDate(r.日期)].join("|");
+  const old=map.get(key);
+  if(!old || (r.詢問內容||"").length>(old.詢問內容||"").length)map.set(key,r);
  }
  return [...map.values()];
 }
 function setConnectorData(messages){
  state.rows=dedupe(messages.filter(includeMail).filter(m=>!noiseMail(m)).map(m=>{
    const raw=m.body?.content||m.bodyPreview||"", c=parseCustomer(raw,m.subject);
-   return isInternalOnly(m,c)?null:flatten(m);
+   if(isInternalOnly(m,c))return null;
+   const judge=aiJudge(m,c);
+   return judge.isInquiry?flatten(m):null;
  }).filter(Boolean));
  render();
 }
