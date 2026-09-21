@@ -2,7 +2,7 @@ const state={rows:[]};
 const GRAPH="https://graph.microsoft.com/v1.0";
 const CLIENT_ID="455752c7-007a-4bf2-b84a-249fd096126b";
 const TENANT_ID="12b9a8f7-aa9d-452b-b3f5-1369d0450558";
-const SCOPES=["https://graph.microsoft.com/Mail.Read"];
+const SCOPES=["User.Read","Mail.Read"];
 
 function text(v){
  const s=String(v??""); if(!s)return "";
