@@ -1,6 +1,7 @@
 const state={rows:[]};
 const GRAPH="https://graph.microsoft.com/v1.0";
-const CLIENT_KEY="vectech_ms_client_id";
+const CLIENT_ID="455752c7-007a-4bf2-b84a-249fd096126b";
+const TENANT_ID="12b9a8f7-aa9d-452b-b3f5-1369d0450558";
 const SCOPES=["openid","profile","offline_access","Mail.Read"];
 
 function text(v){
@@ -76,11 +77,11 @@ function render(){
  if(!state.rows.length){el.innerHTML='<div style="padding:25px;text-align:center;color:#94a3b8">目前沒有資料</div>';return}
  el.innerHTML=state.rows.map(r=>'<div class="item"><b>'+esc(r.公司名稱||"未辨識公司")+'　'+esc(r.聯絡人||"")+'</b><div class="meta">'+esc(r.日期)+'　'+esc(r.Email||r.電話||"")+'</div><div class="q">'+esc(r.詢問內容)+'</div></div>').join("");
 }
-function clientId(){return localStorage.getItem(CLIENT_KEY)||""}
-function showSetup(){const x=document.getElementById("setup");if(x){x.hidden=false;document.getElementById("clientId").value=clientId()}}
+function clientId(){return CLIENT_ID}
+function showSetup(){const x=document.getElementById("setup");if(x)x.hidden=false}
 function msalApp(){
  const id=clientId(); if(!id)return null;
- return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/common",redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
+ return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/"+TENANT_ID,redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
 }
 async function token(){
  const app=msalApp(); if(!app){showSetup();throw new Error("尚未設定 Microsoft Application (client) ID")}
@@ -119,7 +120,7 @@ async function run(){
   s.textContent="完成：本月共整理 "+state.rows.length+" 筆網路客戶詢問";
  }catch(e){console.error(e);s.textContent="連線失敗："+e.message;alert("Outlook 連線失敗：\n"+e.message+"\n\n請確認 Microsoft Entra App 已設定 SPA Redirect URI 與 Mail.Read 權限。")}
 }
-function saveClient(){const v=document.getElementById("clientId").value.trim();if(!/^[0-9a-f-]{36}$/i.test(v)){alert("請貼上正確的 Application (client) ID");return}localStorage.setItem(CLIENT_KEY,v);location.reload()}
+
 function exportExcel(){
  if(!state.rows.length){alert("請先執行本月統計");return}
  const wb=XLSX.utils.book_new(),ws=XLSX.utils.json_to_sheet(state.rows);
@@ -128,6 +129,6 @@ function exportExcel(){
 }
 document.getElementById("run").onclick=run;
 document.getElementById("export").onclick=exportExcel;
-document.getElementById("saveClient").onclick=saveClient;
-if(!clientId())showSetup();
+document.getElementById("connect").onclick=run;
+if(window.location.search.includes("error")){document.getElementById("status").textContent="登入回傳發生錯誤，請再按「登入並連線 Outlook」";}
 render();
