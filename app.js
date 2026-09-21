@@ -62,7 +62,8 @@ function extractSalesperson(raw){
  for(const name of SALES_NAME_HINTS){
   if(new RegExp("\\b"+name+"\\b","i").test(head))return name;
  }
- return "";
+ const generic=head.match(/(?:業務人員|負責業務|負責人|assigned\\s+to|salesperson)\\s*[:：\\-]\\s*([A-Z][A-Z0-9._-]{2,20})\\b/i);
+ return generic?.[1] ? generic[1].toUpperCase() : "";
 }
 
 function includeMail(m){
