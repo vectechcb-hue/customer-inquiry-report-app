@@ -2,7 +2,7 @@ const state={rows:[]};
 const GRAPH="https://graph.microsoft.com/v1.0";
 const CLIENT_ID="455752c7-007a-4bf2-b84a-249fd096126b";
 const TENANT_ID="12b9a8f7-aa9d-452b-b3f5-1369d0450558";
-const SCOPES=["openid","profile","offline_access","Mail.Read"];
+const SCOPES=["https://graph.microsoft.com/Mail.Read"];
 
 function text(v){
  const s=String(v??""); if(!s)return "";
@@ -84,20 +84,31 @@ function msalApp(){
  return new msal.PublicClientApplication({auth:{clientId:id,authority:"https://login.microsoftonline.com/"+TENANT_ID,redirectUri:location.origin+location.pathname},cache:{cacheLocation:"localStorage"}});
 }
 async function token(){
- const app=msalApp(); if(!app){showSetup();throw new Error("尚未設定 Microsoft Application (client) ID")}
+ const app=msalApp(); if(!app){showSetup();throw new Error("尚未設定 Microsoft Application ID")}
  await app.initialize();
- const r=await app.handleRedirectPromise();
- if(r?.account)app.setActiveAccount(r.account);
- const account=app.getActiveAccount()||app.getAllAccounts()[0];
- if(!account){await app.loginRedirect({scopes:SCOPES,prompt:"select_account"});return null}
- try{return (await app.acquireTokenSilent({account,scopes:SCOPES})).accessToken}
- catch(e){await app.acquireTokenRedirect({account,scopes:SCOPES,prompt:"consent"});return null}
+ try{
+  const r=await app.handleRedirectPromise();
+  if(r?.account)app.setActiveAccount(r.account);
+ }catch(e){console.warn("redirect",e)}
+ let account=app.getActiveAccount()||app.getAllAccounts()[0];
+ if(!account){
+  const login=await app.loginPopup({scopes:SCOPES,prompt:"select_account"});
+  account=login.account; if(account)app.setActiveAccount(account);
+ }
+ try{
+  const t=await app.acquireTokenSilent({account,scopes:SCOPES});
+  return t.accessToken;
+ }catch(e){
+  console.warn("silent token failed",e);
+  const t=await app.acquireTokenPopup({account,scopes:SCOPES,prompt:"consent"});
+  return t.accessToken;
+ }
 }
 async function graphAll(url,tok){
  const out=[];let next=url;
  while(next){
   const r=await fetch(next,{headers:{Authorization:"Bearer "+tok,Prefer:'outlook.body-content-type="html"'}});
-  if(!r.ok)throw new Error("Microsoft Graph "+r.status);
+  if(!r.ok){let detail="";try{const e=await r.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Microsoft Graph "+r.status+(detail?" — "+detail:""));}
   const j=await r.json();out.push(...(j.value||[]));next=j["@odata.nextLink"]||null;
  }
  return out;
@@ -112,16 +123,16 @@ async function fetchMonth(tok){
  return [...a,...b];
 }
 async function run(){
- const s=document.getElementById("status");s.textContent="正在連線 Outlook…";
+ const s=document.getElementById("status");s.textContent="正在重新驗證 Outlook 權限…";
  try{
   const tok=await token();if(!tok)return;
-  s.textContent="已登入，正在掃描本月郵件…";
-  const messages=await fetchMonth(tok);setConnectorData(messages);
+  s.textContent="已登入，正在驗證 Microsoft Graph…";
+  const me=await fetch(GRAPH+"/me?$select=mail,userPrincipalName,displayName",{headers:{Authorization:"Bearer "+tok}});\n  if(!me.ok){let detail="";try{const e=await me.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Graph 驗證 "+me.status+(detail?" — "+detail:""))}\n  s.textContent="Graph 驗證成功，正在掃描本月郵件…";\n  const messages=await fetchMonth(tok);setConnectorData(messages);
   s.textContent="完成：本月共整理 "+state.rows.length+" 筆網路客戶詢問";
  }catch(e){console.error(e);s.textContent="連線失敗："+e.message;alert("Outlook 連線失敗：\n"+e.message+"\n\n請確認 Microsoft Entra App 已設定 SPA Redirect URI 與 Mail.Read 權限。")}
 }
 
-function exportExcel(){
+function reconnect(){\n const app=msalApp();if(!app){alert("App 設定遺失");return}\n app.initialize().then(()=>app.logoutPopup({mainWindowRedirectUri:location.href})).then(()=>location.reload()).catch(e=>{alert("登出失敗："+e.message)})\n}\nfunction exportExcel(){
  if(!state.rows.length){alert("請先執行本月統計");return}
  const wb=XLSX.utils.book_new(),ws=XLSX.utils.json_to_sheet(state.rows);
  XLSX.utils.book_append_sheet(wb,ws,"本月網路客戶");
