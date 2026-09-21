@@ -100,8 +100,8 @@ async function token(){
   return t.accessToken;
  }catch(e){
   console.warn("silent token failed",e);
-  const t=await app.acquireTokenPopup({account,scopes:SCOPES,prompt:"consent"});
-  return t.accessToken;
+  await app.acquireTokenRedirect({account,scopes:SCOPES,prompt:"consent",redirectUri:location.origin+location.pathname});
+  return null;
  }
 }
 async function graphAll(url,tok){
@@ -127,7 +127,9 @@ async function run(){
  try{
   const tok=await token();if(!tok)return;
   s.textContent="已登入，正在驗證 Microsoft Graph…";
-  const me=await fetch(GRAPH+"/me?$select=mail,userPrincipalName,displayName",{headers:{Authorization:"Bearer "+tok}});\n  if(!me.ok){let detail="";try{const e=await me.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Graph 驗證 "+me.status+(detail?" — "+detail:""))}\n  s.textContent="Graph 驗證成功，正在掃描本月郵件…";\n  const messages=await fetchMonth(tok);setConnectorData(messages);
+  const me=await fetch(GRAPH+"/me?$select=mail,userPrincipalName,displayName",{headers:{Authorization:"Bearer "+tok}});
+  if(!me.ok){let detail="";try{const e=await me.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Graph 驗證 "+me.status+(detail?" — "+detail:""))}\n  s.textContent="Graph 驗證成功，正在掃描本月郵件…";
+  const messages=await fetchMonth(tok);setConnectorData(messages);
   s.textContent="完成：本月共整理 "+state.rows.length+" 筆網路客戶詢問";
  }catch(e){console.error(e);s.textContent="連線失敗："+e.message;alert("Outlook 連線失敗：\n"+e.message+"\n\n請確認 Microsoft Entra App 已設定 SPA Redirect URI 與 Mail.Read 權限。")}
 }
