@@ -138,7 +138,8 @@ async function run(){
 function reconnect(){
  const app=msalApp();if(!app){alert("App 設定遺失");return}
  app.initialize().then(()=>app.logoutPopup({mainWindowRedirectUri:location.href})).then(()=>location.reload()).catch(e=>{alert("登出失敗："+e.message)})
-}\nfunction exportExcel(){
+}
+function exportExcel(){
  if(!state.rows.length){alert("請先執行本月統計");return}
  const wb=XLSX.utils.book_new(),ws=XLSX.utils.json_to_sheet(state.rows);
  XLSX.utils.book_append_sheet(wb,ws,"本月網路客戶");
