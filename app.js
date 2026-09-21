@@ -128,13 +128,17 @@ async function run(){
   const tok=await token();if(!tok)return;
   s.textContent="已登入，正在驗證 Microsoft Graph…";
   const me=await fetch(GRAPH+"/me?$select=mail,userPrincipalName,displayName",{headers:{Authorization:"Bearer "+tok}});
-  if(!me.ok){let detail="";try{const e=await me.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Graph 驗證 "+me.status+(detail?" — "+detail:""))}\n  s.textContent="Graph 驗證成功，正在掃描本月郵件…";
+  if(!me.ok){let detail="";try{const e=await me.json();detail=(e?.error?.code?e.error.code+": ":"")+(e?.error?.message||"")}catch(_){}throw new Error("Graph 驗證 "+me.status+(detail?" — "+detail:""))}
+  s.textContent="Graph 驗證成功，正在掃描本月郵件…";
   const messages=await fetchMonth(tok);setConnectorData(messages);
   s.textContent="完成：本月共整理 "+state.rows.length+" 筆網路客戶詢問";
  }catch(e){console.error(e);s.textContent="連線失敗："+e.message;alert("Outlook 連線失敗：\n"+e.message+"\n\n請確認 Microsoft Entra App 已設定 SPA Redirect URI 與 Mail.Read 權限。")}
 }
 
-function reconnect(){\n const app=msalApp();if(!app){alert("App 設定遺失");return}\n app.initialize().then(()=>app.logoutPopup({mainWindowRedirectUri:location.href})).then(()=>location.reload()).catch(e=>{alert("登出失敗："+e.message)})\n}\nfunction exportExcel(){
+function reconnect(){
+ const app=msalApp();if(!app){alert("App 設定遺失");return}
+ app.initialize().then(()=>app.logoutPopup({mainWindowRedirectUri:location.href})).then(()=>location.reload()).catch(e=>{alert("登出失敗："+e.message)})
+}\nfunction exportExcel(){
  if(!state.rows.length){alert("請先執行本月統計");return}
  const wb=XLSX.utils.book_new(),ws=XLSX.utils.json_to_sheet(state.rows);
  XLSX.utils.book_append_sheet(wb,ws,"本月網路客戶");
