@@ -7,6 +7,7 @@ const SCOPES = ["User.Read", "Mail.Read"];
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
+const LINE_HISTORY_KEY = "vectech_line_history_import_v1";
 const AUTO_SCAN_KEY = "vectech_auto_scan_after_login_v1";
 
 let msalAppInstance = null;
@@ -46,6 +47,10 @@ function loadManual(){
     const x = JSON.parse(localStorage.getItem(MANUAL_KEY) || "[]");
     state.manualRows = Array.isArray(x) ? x : [];
   } catch (_) { state.manualRows = []; }
+  try {
+    const x = JSON.parse(localStorage.getItem(LINE_HISTORY_KEY) || "[]");
+    if (Array.isArray(x) && x.length) state.manualRows.push(...x);
+  } catch (_) {}
 }
 function normalizeLineApiUrl(value){
   let v = safeText(value).replace(/\s+/g,"");
@@ -559,12 +564,17 @@ function buildLineConversationCases(events){
         .map(e => cleanLineMessageText(e.text || e.ocrText || ""))
         .filter(x => x && !lineIsAcknowledgement(x));
 
+      const contactEvidence = !!(c.email || c.phone || c.company || c.address || c.name);
+      const productEvidence = productList.length > 0;
+      const relationshipEvidence = /代理商|經銷|經銷商|客人|客戶|在找這個型號|採購/i.test(rawText);
       const valid = completeSix ||
-        (productList.length > 0 && commercial) ||
-        (productList.length > 0 && /代理商|經銷|客人|客戶|在找這個型號/i.test(rawText)) ||
-        (hasImage && commercial && meaningful.length > 0 && (c.company || c.name || c.phone || c.email));
+        (productEvidence && commercial) ||
+        (productEvidence && relationshipEvidence) ||
+        (commercial && contactEvidence) ||
+        (hasImage && commercial && meaningful.length > 0) ||
+        commercial;
 
-      if (!valid) return;
+      if (!valid || meaningful.length === 0) return;
 
       let question = meaningful
         .filter(x => lineHasCommercialIntent(x) || extractLineProducts(x).length)
@@ -597,7 +607,9 @@ function buildLineConversationCases(events){
       row["產品型號"] = productList.join("、");
       row["公司地址"] = c.address || "";
       row["客戶類型"] = /代理商|經銷/i.test(rawText) ? "代理商／經銷商" : /採購|採買/i.test(rawText) ? "採購端" : "一般客戶";
-      row["LINE分析等級"] = completeSix ? "A｜明確網路客戶" : "A｜明確網路客戶";
+      row["LINE分析等級"] = completeSix || (productList.length > 0 && commercial) || (commercial && contactEvidence)
+        ? "A｜明確網路客戶"
+        : "B｜疑似網路客戶｜待確認";
       row["對話訊息數"] = current.events.length;
       row["含圖片"] = hasImage ? "是" : "否";
       cases.push(row);
@@ -623,6 +635,101 @@ function buildLineConversationCases(events){
   }
 
   return dedupe(cases);
+}
+
+
+function parseCsvRows(text){
+  const rows = [];
+  let row = [], cell = "", quoted = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    const next = text[i+1];
+    if(ch === '"'){
+      if(quoted && next === '"'){ cell += '"'; i++; continue; }
+      quoted = !quoted; continue;
+    }
+    if(ch === "," && !quoted){ row.push(cell); cell=""; continue; }
+    if((ch === "\n" || ch === "\r") && !quoted){
+      if(ch === "\r" && next === "\n") i++;
+      row.push(cell); cell="";
+      if(row.some(v => safeText(v))) rows.push(row);
+      row=[];
+      continue;
+    }
+    cell += ch;
+  }
+  row.push(cell);
+  if(row.some(v => safeText(v))) rows.push(row);
+  return rows;
+}
+
+function pickCsvIndex(headers, patterns){
+  for(const p of patterns){
+    const i = headers.findIndex(h => p.test(safeText(h)));
+    if(i >= 0) return i;
+  }
+  return -1;
+}
+
+function parseLineHistoryCsv(text){
+  const rows = parseCsvRows(text);
+  if(rows.length < 2) return [];
+  const headers = rows[0].map(x => safeText(x).replace(/^\uFEFF/,""));
+  const iTime = pickCsvIndex(headers,[/日期|時間|時間戳|timestamp/i]);
+  const iUser = pickCsvIndex(headers,[/聊天室.?id|用戶.?id|使用者.?id|user.?id|chat.?id/i]);
+  const iName = pickCsvIndex(headers,[/用戶名稱|使用者名稱|顧客名稱|姓名|暱稱|name|display/i]);
+  const iSender = pickCsvIndex(headers,[/發送者|傳送者|sender|角色|來源/i]);
+  const iText = pickCsvIndex(headers,[/訊息內容|訊息|留言|內容|message|text|chat/i]);
+
+  const events = [];
+  for(let r=1;r<rows.length;r++){
+    const cells = rows[r];
+    const text = safeText(iText >= 0 ? cells[iText] : cells[0]);
+    if(!text) continue;
+
+    const sender = safeText(iSender >= 0 ? cells[iSender] : "");
+    if(/承邦|VECTECH|威鐵克|官方帳號|店家|客服/i.test(sender)) continue;
+
+    const rawTime = safeText(iTime >= 0 ? cells[iTime] : "");
+    const d = rawTime ? new Date(rawTime) : new Date();
+    const timestamp = isNaN(d) ? new Date().toISOString() : d.toISOString();
+
+    const userId = safeText(iUser >= 0 ? cells[iUser] : "") || safeText(iName >= 0 ? cells[iName] : "") || ("csv-user-" + r);
+    const displayName = safeText(iName >= 0 ? cells[iName] : "");
+    events.push({
+      eventId: "csv-" + r,
+      userId,
+      timestamp,
+      messageType: "text",
+      text,
+      displayName,
+      salesperson: ""
+    });
+  }
+
+  return buildLineConversationCases(events);
+}
+
+async function importLineHistoryCsv(file){
+  if(!file) return;
+  updateStatus("正在讀取 LINE 歷史聊天 CSV…");
+  const text = await file.text();
+  const cases = parseLineHistoryCsv(text);
+  if(!cases.length){
+    throw new Error("CSV 中沒有解析出可判定的 LINE 客戶詢問；請確認匯出的欄位包含日期/時間、訊息內容與聊天室或用戶資訊。");
+  }
+
+  // Imported history is stored as local records so it is merged with live
+  // webhook data and remains available on this device.
+  const imported = cases.map(r => ({...r, _lineHistoryImport:true, 備註:(r.備註 ? r.備註 + "；" : "") + "LINE歷史聊天匯入"}));
+  state.manualRows = state.manualRows.filter(r => !r._lineHistoryImport);
+  state.manualRows.push(...imported);
+  const persistent = state.manualRows.filter(r => r._lineHistoryImport);
+  localStorage.setItem(LINE_HISTORY_KEY, JSON.stringify(persistent));
+  saveManual();
+  state.rows = dedupe([...selectedMonthRows(), ...state.rows.filter(r => (r.來源平台||"") !== "LINE"), ...imported]);
+  render();
+  updateStatus("LINE 歷史聊天匯入完成：" + cases.length + " 筆案件。可再執行選定月份統計與 Outlook 合併。");
 }
 
 async function graphAll(url, tok){
@@ -809,6 +916,17 @@ function setup(){
   byId("saveLineApi")?.addEventListener("click", () => {
     saveLineApiUrl();
     updateStatus(getLineApiUrl() ? "LINE API 已儲存，可執行選定月份統計測試。" : "LINE API 設定已清除。");
+  });
+  byId("importLineCsv")?.addEventListener("click", async () => {
+    try {
+      const file = byId("lineHistoryCsv")?.files?.[0];
+      if (!file) throw new Error("請先選擇 LINE 聊天紀錄 CSV");
+      await importLineHistoryCsv(file);
+    } catch (e) {
+      console.error(e);
+      updateStatus("LINE 歷史聊天匯入失敗：" + e.message);
+      alert("LINE 歷史聊天匯入失敗：\n" + e.message);
+    }
   });
   byId("testLineApi")?.addEventListener("click", async () => {
     try {
