@@ -47,8 +47,15 @@ function loadManual(){
     state.manualRows = Array.isArray(x) ? x : [];
   } catch (_) { state.manualRows = []; }
 }
+function normalizeLineApiUrl(value){
+  let v = safeText(value).replace(/\s+/g,"");
+  v = v.replace(/\/+$/,"");
+  // Accept the Worker root, /webhook, /messages, or /status pasted by the user.
+  v = v.replace(/\/(?:webhook|messages|status)$/i,"");
+  return v;
+}
 function getLineApiUrl(){
-  return safeText(localStorage.getItem(LINE_API_KEY) || byId("lineApiUrl")?.value).replace(/\/$/,"");
+  return normalizeLineApiUrl(localStorage.getItem(LINE_API_KEY) || byId("lineApiUrl")?.value);
 }
 function getLineReadKey(){
   return safeText(localStorage.getItem(LINE_READ_KEY) || byId("lineReadKey")?.value);
@@ -579,7 +586,7 @@ function exportExcel(){
 
 function setup(){
   loadManual();
-  const lineApi = localStorage.getItem(LINE_API_KEY) || "";
+  const lineApi = normalizeLineApiUrl(localStorage.getItem(LINE_API_KEY) || "");
   const lineReadKey = localStorage.getItem(LINE_READ_KEY) || "";
   if (byId("lineApiUrl")) byId("lineApiUrl").value = lineApi;
   if (byId("lineReadKey")) byId("lineReadKey").value = lineReadKey;
