@@ -47,10 +47,20 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/webhook") {
       const rawBody = await request.text();
-      const signature = request.headers.get("x-line-signature") || "";
-      if (!(await verifySignature(env.LINE_CHANNEL_SECRET, rawBody, signature))) return response({ ok: false, error: "invalid signature" }, 401);
       let payload;
       try { payload = JSON.parse(rawBody); } catch (_) { return response({ ok: false, error: "invalid json" }, 400); }
+
+      // LINE Developers "Verify" sends a connectivity-check POST with events: [].
+      // Per LINE's documentation, this verification request should return HTTP 200.
+      if (Array.isArray(payload.events) && payload.events.length === 0) {
+        return response({ ok: true, verify: true });
+      }
+
+      const signature = request.headers.get("x-line-signature") || "";
+      if (!(await verifySignature(env.LINE_CHANNEL_SECRET, rawBody, signature))) {
+        return response({ ok: false, error: "invalid signature" }, 401);
+      }
+
       ctx.waitUntil(processEvents(payload.events || [], env));
       return response({ ok: true });
     }
