@@ -218,6 +218,45 @@ export default {
       return response({ ok: true, events });
     }
 
+    if (request.method === "GET" && url.pathname === "/status") {
+      try {
+        await ensureDiagnosticsTable(env);
+        const eventCount = await env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM line_events"
+        ).first();
+        const webhookLogCount = await env.DB.prepare(
+          "SELECT COUNT(*) AS count FROM webhook_logs"
+        ).first();
+        const lastWebhook = await env.DB.prepare(
+          "SELECT timestamp,event_count,signature_present,signature_valid,event_types,processed FROM webhook_logs ORDER BY id DESC LIMIT 1"
+        ).first();
+        const lastEvent = await env.DB.prepare(
+          "SELECT timestamp,message_type FROM line_events ORDER BY timestamp DESC LIMIT 1"
+        ).first();
+
+        return response({
+          ok: true,
+          service: "vectech-line-customer-api",
+          eventCount: Number(eventCount?.count || 0),
+          webhookLogCount: Number(webhookLogCount?.count || 0),
+          lastWebhook: lastWebhook ? {
+            timestamp: new Date(Number(lastWebhook.timestamp)).toISOString(),
+            eventCount: Number(lastWebhook.event_count || 0),
+            signaturePresent: !!lastWebhook.signature_present,
+            signatureValid: !!lastWebhook.signature_valid,
+            eventTypes: lastWebhook.event_types || "",
+            processed: !!lastWebhook.processed
+          } : null,
+          lastEvent: lastEvent ? {
+            timestamp: new Date(Number(lastEvent.timestamp)).toISOString(),
+            messageType: lastEvent.message_type || ""
+          } : null
+        });
+      } catch (err) {
+        return response({ ok: false, error: "status query failed", detail: String(err?.message || err || "unknown") }, 500);
+      }
+    }
+
     if (request.method === "GET" && url.pathname === "/diagnostics") {
       const readKey = request.headers.get("X-API-Key") || "";
       if (!env.LINE_READ_API_KEY || readKey !== env.LINE_READ_API_KEY) {
