@@ -24,6 +24,33 @@ async function verifySignature(secret, body, signature) {
   return expected === signature;
 }
 
+function isLikelyChannelSecret(value) {
+  return /^[0-9a-fA-F]{32}$/.test(String(value || "").trim());
+}
+
+function getLineCredentials(env) {
+  const configuredSecret = String(env.LINE_CHANNEL_SECRET || "").trim();
+  const configuredAccessToken = String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
+
+  // Common setup mistake: the two LINE values are entered into the opposite
+  // Cloudflare variables. LINE Channel Secrets are 32 hex characters, while
+  // Channel Access Tokens are substantially longer. Recover from that swap
+  // without exposing either secret.
+  if (!isLikelyChannelSecret(configuredSecret) && isLikelyChannelSecret(configuredAccessToken)) {
+    return {
+      channelSecret: configuredAccessToken,
+      accessToken: configuredSecret,
+      layout: "swapped_recovered"
+    };
+  }
+
+  return {
+    channelSecret: configuredSecret,
+    accessToken: configuredAccessToken,
+    layout: "normal"
+  };
+}
+
 async function getProfile(userId, token) {
   if (!userId || !token) return "";
   try {
@@ -98,9 +125,10 @@ async function processEvents(events, env) {
         ? (ev.message.text || "")
         : "";
 
+    const creds = getLineCredentials(env);
     const displayName =
       (ev.source?.type === "user")
-        ? await getProfile(userId, env.LINE_CHANNEL_ACCESS_TOKEN)
+        ? await getProfile(userId, creds.accessToken)
         : "";
 
     await env.DB.prepare(
@@ -237,6 +265,9 @@ export default {
         return response({
           ok: true,
           service: "vectech-line-customer-api",
+          credentialLayout: getLineCredentials(env).layout,
+          channelSecretLooksValid: isLikelyChannelSecret(getLineCredentials(env).channelSecret),
+          accessTokenLength: getLineCredentials(env).accessToken.length,
           eventCount: Number(eventCount?.count || 0),
           webhookLogCount: Number(webhookLogCount?.count || 0),
           lastWebhook: lastWebhook ? {
