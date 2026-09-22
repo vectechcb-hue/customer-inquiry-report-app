@@ -291,12 +291,27 @@ export default {
           "SELECT timestamp,message_type FROM line_events ORDER BY timestamp DESC LIMIT 1"
         ).first();
 
+        const credentials = getLineCredentials(env);
+        const [secretHash, accessHash, botInfo] = await Promise.all([
+          sha256Hex(credentials.channelSecret),
+          sha256Hex(credentials.accessToken),
+          getBotInfo(credentials.accessToken)
+        ]);
+
         return response({
           ok: true,
           service: "vectech-line-customer-api",
-          credentialLayout: getLineCredentials(env).layout,
-          channelSecretLooksValid: isLikelyChannelSecret(getLineCredentials(env).channelSecret),
-          accessTokenLength: getLineCredentials(env).accessToken.length,
+          credentialLayout: credentials.layout,
+          channelSecretLooksValid: isLikelyChannelSecret(credentials.channelSecret),
+          channelSecretFingerprint: secretHash ? secretHash.slice(0, 12) : "",
+          accessTokenLength: credentials.accessToken.length,
+          accessTokenFingerprint: accessHash ? accessHash.slice(0, 12) : "",
+          accessTokenBotInfo: {
+            ok: botInfo.ok,
+            status: botInfo.status,
+            basicId: botInfo.basicId || "",
+            userId: botInfo.userId || ""
+          },
           eventCount: Number(eventCount?.count || 0),
           webhookLogCount: Number(webhookLogCount?.count || 0),
           lastWebhook: lastWebhook ? {
