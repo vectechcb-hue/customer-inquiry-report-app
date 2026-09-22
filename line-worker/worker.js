@@ -51,6 +51,34 @@ function getLineCredentials(env) {
   };
 }
 
+
+async function sha256Hex(value) {
+  const bytes = new TextEncoder().encode(String(value || ""));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function getBotInfo(token) {
+  if (!token) return { ok: false, status: 0, id: "", userId: "", basicId: "" };
+  try {
+    const r = await fetch("https://api.line.me/v2/bot/info", {
+      headers: { Authorization: "Bearer " + token }
+    });
+    const j = await r.json().catch(() => ({}));
+    return {
+      ok: r.ok,
+      status: r.status,
+      id: j.basicId || "",
+      userId: j.userId || "",
+      basicId: j.basicId || ""
+    };
+  } catch (_) {
+    return { ok: false, status: 0, id: "", userId: "", basicId: "" };
+  }
+}
+
 async function getProfile(userId, token) {
   if (!userId || !token) return "";
   try {
