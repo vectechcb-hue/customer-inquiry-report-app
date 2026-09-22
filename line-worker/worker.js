@@ -183,7 +183,8 @@ export default {
         return response({ ok: true, verify: true });
       }
 
-      const signatureValid = await verifySignature(env.LINE_CHANNEL_SECRET, rawBody, signature);
+      const credentials = getLineCredentials(env);
+      const signatureValid = await verifySignature(credentials.channelSecret, rawBody, signature);
       const eventTypes = events.map(e => e?.type || "").filter(Boolean).join(",");
 
       const logId = await logWebhook(env, {
@@ -191,7 +192,7 @@ export default {
         eventCount: events.length,
         signaturePresent: !!signature,
         signatureValid,
-        eventTypes,
+        eventTypes: eventTypes + ":" + credentials.layout,
         processed: false
       });
 
