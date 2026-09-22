@@ -55,10 +55,14 @@ function normalizeLineApiUrl(value){
   return v;
 }
 function getLineApiUrl(){
-  return normalizeLineApiUrl(localStorage.getItem(LINE_API_KEY) || byId("lineApiUrl")?.value);
+  const input = safeText(byId("lineApiUrl")?.value);
+  const stored = safeText(localStorage.getItem(LINE_API_KEY));
+  return normalizeLineApiUrl(input || stored);
 }
 function getLineReadKey(){
-  return safeText(localStorage.getItem(LINE_READ_KEY) || byId("lineReadKey")?.value);
+  const input = safeText(byId("lineReadKey")?.value);
+  const stored = safeText(localStorage.getItem(LINE_READ_KEY));
+  return input || stored;
 }
 function saveLineApiUrl(){
   const v = getLineApiUrl();
