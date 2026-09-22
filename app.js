@@ -87,41 +87,119 @@ function field(text, regexes){
   }
   return "";
 }
-function parseCustomer(raw, subject){
+function firstLabeled(text, labels){
+  for (const label of labels) {
+    const re = new RegExp("(?:^|\\n)\\s*" + label + "\\s*[:：]?\\s*([^\\n]+)", "i");
+    const m = text.match(re);
+    if (m?.[1]) return m[1].trim();
+  }
+  return "";
+}
+function normalizePhone(v){
+  return safeText(v)
+    .replace(/(?:TEL|電話|聯絡電話|手機|Mobile|Phone)\\s*[:：]?/ig,"")
+    .replace(/(?:FAX|傳真)\\s*[:：]?.*$/i,"")
+    .replace(/[，,；;。]+$/,"")
+    .trim();
+}
+function extractPhones(text){
+  const hits = text.match(/(?:0\\d{1,2}[-\\s]?\\d{6,8}(?:#\\d{1,5})?|09\\d{2}[-\\s]?\\d{3}[-\\s]?\\d{3})/g) || [];
+  return [...new Set(hits.map(normalizePhone).filter(x => x.length >= 8))];
+}
+function extractEmails(text){
+  return [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/ig) || [])
+    .map(x => x.replace(/[>，,。；;]+$/,"").trim().toLowerCase()))];
+}
+function looksLikeCompany(v){
+  return /(?:有限公司|股份有限公司|企業行|企業社|企業有限公司|科技|電子|電機|工業|實業|實業社|貿易|國際|系統|生技|醫療|工程|材料|塑膠|精密|自動化)/i.test(v || "");
+}
+function cleanCompanyCandidate(v){
+  return safeText(v)
+    .replace(/^(?:公司名稱|公司名|公司)\\s*[:：]?\\s*/i,"")
+    .replace(/\\b(?:TEL|FAX|Email|E-mail|Phone|Mobile)\\b.*$/i,"")
+    .replace(/(?:TEL|FAX|電話|傳真|手機|聯絡電話)\\s*[:：]?[^\\n]*/ig,"")
+    .replace(/\\s{2,}/g," ")
+    .trim();
+}
+function extractCompany(text, fallbackSubject){
+  const labeled = firstLabeled(text, ["公司名稱","公司名","公司"]);
+  if (looksLikeCompany(labeled)) return cleanCompanyCandidate(labeled);
+
+  const lines = text.split("\\n").map(x => x.trim()).filter(Boolean);
+  const candidates = lines
+    .map(cleanCompanyCandidate)
+    .filter(x =>
+      x.length >= 3 &&
+      x.length <= 60 &&
+      looksLikeCompany(x) &&
+      !/@/.test(x) &&
+      !/^(?:TEL|FAX|電話|傳真|手機|地址|Email|E-mail|Website|網站)/i.test(x)
+    );
+  if (candidates.length) return candidates[0];
+
+  return "";
+}
+function extractContactName(text, mailMeta, fallbackDisplay = ""){
+  const labeled = firstLabeled(text, ["姓名","聯絡人","聯絡姓名","窗口"]);
+  if (labeled && labeled.length <= 40) return labeled.replace(/[，,。；;]+$/,"").trim();
+
+  // 常見簽名格式：Email 前一行或公司資訊前的中文姓名。
+  const lines = text.split("\\n").map(x => x.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (/^(?:TEL|FAX|電話|傳真|手機|聯絡電話|Email|E-mail|Website|網站|地址|公司名稱|公司)/i.test(line)) continue;
+    if (/@/.test(line) || /https?:\\/\\//i.test(line)) continue;
+    if (/^09\\d{8}$|^0\\d{1,2}[-\\s]?\\d{6,8}$/i.test(line)) continue;
+    if (/^[\\u4e00-\\u9fff]{2,5}(?:\\s+[A-Za-z]{2,20})?$/.test(line)) return line;
+    const m = line.match(/(?:我是|姓名|聯絡人)\\s*[:：]?\\s*([\\u4e00-\\u9fff]{2,5})/i);
+    if (m?.[1]) return m[1];
+  }
+
+  const metaName = safeText(mailMeta?.from?.emailAddress?.name || mailMeta?.sender?.emailAddress?.name);
+  if (metaName && !/承邦|VECTECH|威鐵克/i.test(metaName)) return metaName;
+  return fallbackDisplay;
+}
+function extractQuestionText(text){
+  const normalized = htmlToText(text).replace(/\\u00a0/g," ");
+  const explicit = normalized.match(/(?:詢問內容|問題|需求|留言|Message|Inquiry)\\s*[:：]?\\s*([\\s\\S]+?)(?=(?:Website|網站|公司名稱|公司名|公司電話|聯絡電話|電話|Email|E-mail|姓名|聯絡人|地址|TEL|FAX)\\s*[:：]?|$)/i);
+  if (explicit?.[1]) return explicit[1].trim();
+
+  const lines = normalized.split("\\n").map(x => x.trim()).filter(Boolean);
+  const out = [];
+  for (const line of lines) {
+    if (!line) continue;
+    if (/^(?:From|寄件者|To|收件者|Cc|主旨|Subject|Sent|日期|Date)\\s*[:：]/i.test(line)) continue;
+    if (/^(?:公司名稱|公司名|公司|姓名|聯絡人|地址|公司地址|聯絡電話|公司電話|電話|手機|TEL|FAX|Email|E-mail|Website|網站)\\s*[:：]?/i.test(line)) continue;
+    if (/@[A-Z0-9.-]+\\.[A-Z]{2,}/i.test(line) && /(?:TEL|FAX|Email|E-mail)/i.test(line)) continue;
+    if (/^(?:承邦有限公司|VECTECH|威鐵克)/i.test(line)) continue;
+    if (/^[-_]{3,}$/.test(line)) continue;
+    out.push(line);
+  }
+  return out.join("\\n").trim();
+}
+function parseCustomer(raw, subject, mailMeta = {}){
   const t = htmlToText(raw);
-  let company = field(t, [
-    /公司名稱\s*[:：]?\s*([^\n]+?)(?=\s*(?:姓名|Name|地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /公司\s*[:：]?\s*([^\n]+?)(?=\s*(?:姓名|Name|地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /^\s*([^\n]+?)\s*(?=姓名\s*[:：])/i
-  ]);
-  let name = field(t, [
-    /姓名\s*[:：]?\s*([^\n]+?)(?=\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /聯絡人\s*[:：]?\s*([^\n]+?)(?=\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /Name\s*[:：]?\s*([^\n]+?)(?=\s*(?:Address|Phone|Email|Website)\s*[:：]?|$)/i
-  ]);
-  let phone = field(t, [
-    /聯絡電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /公司電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /Phone\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website)\s*[:：]?|$)/i
-  ]);
-  let email = field(t, [
-    /Email\s*[:：]?\s*([^\s\n<>|]+)/i,
-    /E-mail\s*[:：]?\s*([^\s\n<>|]+)/i
-  ]).replace(/[>，,。；;]+$/,"");
-  let question = field(t, [
-    /詢問內容\s*[:：]?\s*([\s\S]+?)(?=\s*(?:Website|網站)\s*[:：]?|$)/i,
-    /留言\s*[:：]?\s*([\s\S]+?)(?=\s*(?:Website|網站)\s*[:：]?|$)/i
-  ]);
-  const originalSubject = field(t, [
-    /原始主旨\s*[:：]?\s*([^\n]+)/i,
-    /Subject\s*[:：]?\s*([^\n]+)/i
-  ]) || cleanSubject(subject);
-  company = company.replace(/\s*(?:姓名|Name)\s*[:：].*$/i,"").trim();
-  name = name.replace(/\s*(?:地址|Address)\s*[:：].*$/i,"").trim();
-  phone = phone.replace(/\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：].*$/i,"").trim();
-  question = question.replace(/\s*(?:Website|網站)\s*[:：]?.*$/is,"").trim();
-  return { company, name, phone, email, question, originalSubject };
+  const company = extractCompany(t, subject);
+  const name = extractContactName(t, mailMeta, "");
+  const emails = extractEmails(t);
+  const phones = extractPhones(t);
+  const labeledPhone = firstLabeled(t, ["公司電話","聯絡電話","電話","TEL","Phone","手機","Mobile"]);
+  const phone = normalizePhone(labeledPhone || phones[0] || "");
+  const email = firstLabeled(t, ["Email","E-mail"]) || emails[0] || "";
+  const address = firstLabeled(t, ["公司地址","地址","Address"]);
+  const question = extractQuestionText(t);
+
+  const originalSubject = firstLabeled(t, ["原始主旨","Subject"]) || cleanSubject(subject);
+
+  return {
+    company: cleanCompanyCandidate(company),
+    name: safeText(name).replace(/[，,。；;]+$/,"").trim(),
+    phone,
+    email: safeText(email).replace(/[>，,。；;]+$/,"").trim().toLowerCase(),
+    address: safeText(address),
+    question: question.length > 2000 ? question.slice(0,2000) + "…" : question,
+    originalSubject
+  };
 }
 
 const SALES_NAMES = ["CHRIS","ALEX","ALAN","NEIL"];
@@ -221,6 +299,7 @@ function makeRow(c,meta={}){
     聯絡人: c.name || "",
     Email: c.email || "",
     電話: c.phone || "",
+    公司地址: c.address || "",
     詢問內容: c.question || "",
     原始主旨: c.originalSubject || "",
     來源郵件: meta.source || "",
@@ -251,7 +330,7 @@ function dedupe(rows){
 }
 function mailToRow(m){
   const raw = m.body?.content || m.bodyPreview || "";
-  const c = parseCustomer(raw, m.subject);
+  const c = parseCustomer(raw, m.subject, m);
   const salesperson = extractSalesperson(raw, m);
   return makeRow(c, {
     date: m.receivedDateTime || m.sentDateTime,
@@ -782,7 +861,7 @@ function extractDateFromRaw(raw){
 }
 function parseManual(){
   const raw = safeText(byId("mRaw").value);
-  const c = parseCustomer(raw, byId("mSubject").value);
+  const c = parseCustomer(raw, byId("mSubject").value, {});
   const parsedDate = extractDateFromRaw(raw);
   if (parsedDate) byId("mDate").value = parsedDate;
   byId("mSubject").value = c.originalSubject || byId("mSubject").value;
@@ -821,8 +900,18 @@ function xlsxSheet(rows){
   const headers = ["日期","公司名稱","聯絡人","公司電話","詢問內容","業務人員","是否成交","成交金額"];
   const data = [headers, ...rows.map(r => [r.日期 || "", r.公司名稱 || "", r.聯絡人 || "", r.電話 || "", r.詢問內容 || "", r.業務人員 || "", r.是否成交 || "", r.成交金額 || ""])];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{wch:12},{wch:24},{wch:18},{wch:22},{wch:72},{wch:14},{wch:12},{wch:14}];
-  ws["!rows"] = [{hpt:24}, ...rows.map(r => ({ hpt: Math.min(210, Math.max(60, 42 + Math.ceil((r.詢問內容 || "").length / 55) * 18)) }))];
+  ws["!cols"] = [{wch:12},{wch:28},{wch:18},{wch:20},{wch:68},{wch:14},{wch:12},{wch:14}];
+  ws["!rows"] = [{hpt:26}, ...rows.map(r => ({
+    hpt: Math.min(
+      240,
+      Math.max(
+        58,
+        42 +
+        Math.ceil((String(r.詢問內容 || "").length) / 42) * 18 +
+        Math.ceil((String(r.公司名稱 || "").length) / 18) * 12
+      )
+    )
+  }))];
   ws["!autofilter"] = { ref: "A1:H" + data.length };
   const headerStyle = { font:{name:"Microsoft JhengHei",bold:true,color:{rgb:"FFFFFF"}}, fill:{fgColor:{rgb:"4472C4"}}, alignment:{horizontal:"center",vertical:"center",wrap_text:true}, border:{top:{style:"thin",color:{rgb:"B7C9D6"}},bottom:{style:"thin",color:{rgb:"B7C9D6"}},left:{style:"thin",color:{rgb:"B7C9D6"}},right:{style:"thin",color:{rgb:"B7C9D6"}}} };
   for (let c=0;c<8;c++) ws[XLSX.utils.encode_cell({r:0,c})].s = headerStyle;
