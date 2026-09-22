@@ -297,11 +297,7 @@ export default {
         ).first();
 
         const credentials = getLineCredentials(env);
-        const [secretHash, accessHash, botInfo] = await Promise.all([
-          sha256Hex(credentials.channelSecret),
-          sha256Hex(credentials.accessToken),
-          getBotInfo(credentials.accessToken)
-        ]);
+        const botInfo = await getBotInfo(credentials.accessToken);
 
         return response({
           ok: true,
@@ -311,9 +307,7 @@ export default {
             accessToken: "LINE_CHANNEL_ACCESS_TOKEN"
           },
           channelSecretLooksValid: isLikelyChannelSecret(credentials.channelSecret),
-          channelSecretFingerprint: secretHash ? secretHash.slice(0, 12) : "",
           accessTokenLength: credentials.accessToken.length,
-          accessTokenFingerprint: accessHash ? accessHash.slice(0, 12) : "",
           accessTokenBotInfo: {
             ok: botInfo.ok,
             status: botInfo.status,
