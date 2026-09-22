@@ -246,6 +246,52 @@ export default {
       }
     }
 
+    if (request.method === "GET" && url.pathname === "/media") {
+      const readKey = request.headers.get("X-API-Key") || "";
+      if (!env.LINE_READ_API_KEY || readKey !== env.LINE_READ_API_KEY) {
+        return response({ ok: false, error: "unauthorized" }, 401);
+      }
+
+      const eventId = (url.searchParams.get("eventId") || "").trim();
+      if (!eventId) return response({ ok: false, error: "missing eventId" }, 400);
+
+      try {
+        const row = await env.DB.prepare(
+          "SELECT raw_json,message_type FROM line_events WHERE event_id=? LIMIT 1"
+        ).bind(eventId).first();
+
+        if (!row) return response({ ok: false, error: "event not found" }, 404);
+
+        const event = JSON.parse(row.raw_json || "{}");
+        const messageId = event?.message?.id || "";
+        if (!messageId) return response({ ok: false, error: "message content id not found" }, 404);
+
+        const credentials = getLineCredentials(env);
+        if (!credentials.accessToken) {
+          return response({ ok: false, error: "LINE Channel Access Token missing" }, 500);
+        }
+
+        const upstream = await fetch(
+          "https://api-data.line.me/v2/bot/message/" + encodeURIComponent(messageId) + "/content",
+          { headers: { Authorization: "Bearer " + credentials.accessToken } }
+        );
+
+        if (!upstream.ok) {
+          const detail = await upstream.text().catch(() => "");
+          return response({ ok: false, error: "LINE media fetch failed", status: upstream.status, detail: detail.slice(0,200) }, 502);
+        }
+
+        const headers = {
+          "Access-Control-Allow-Origin": "*",
+          "Cache-Control": "private, max-age=300",
+          "Content-Type": upstream.headers.get("content-type") || "application/octet-stream"
+        };
+        return new Response(upstream.body, { status: 200, headers });
+      } catch (err) {
+        return response({ ok: false, error: "media endpoint failed", detail: String(err?.message || err || "unknown") }, 500);
+      }
+    }
+
     if (request.method === "GET" && url.pathname === "/messages") {
       const readKey = request.headers.get("X-API-Key") || "";
       if (!env.LINE_READ_API_KEY || readKey !== env.LINE_READ_API_KEY) {
@@ -267,15 +313,24 @@ export default {
         "SELECT event_id,user_id,timestamp,message_type,message_text,display_name,salesperson FROM line_events WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp DESC"
       ).bind(from, to).all();
 
-      const events = (result.results || []).map(x => ({
-        eventId: x.event_id,
-        userId: x.user_id,
-        timestamp: new Date(Number(x.timestamp)).toISOString(),
-        messageType: x.message_type,
-        text: x.message_text || "",
-        displayName: x.display_name || "",
-        salesperson: x.salesperson || ""
-      }));
+      const events = (result.results || []).map(x => {
+        let messageId = "";
+        try {
+          const raw = JSON.parse(x.raw_json || "{}");
+          messageId = raw?.message?.id || "";
+        } catch (_) {}
+        return {
+          eventId: x.event_id,
+          userId: x.user_id,
+          timestamp: new Date(Number(x.timestamp)).toISOString(),
+          messageType: x.message_type,
+          text: x.message_text || "",
+          displayName: x.display_name || "",
+          salesperson: x.salesperson || "",
+          messageId,
+          hasMedia: ["image","video","audio","file"].includes(x.message_type || "")
+        };
+      });
 
       return response({ ok: true, events });
     }
