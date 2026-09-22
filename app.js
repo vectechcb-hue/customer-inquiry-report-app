@@ -230,6 +230,10 @@ function rowKey(r){
   const platform = safeText(r.來源平台 || "Outlook");
   const subject = cleanSubject(r.原始主旨).replace(/[\s　]+/g," ").toLowerCase();
   const question = safeText(r.詢問內容).replace(/[\s　]+/g," ").toLowerCase();
+  if (platform === "LINE") {
+    const products = safeText(r.產品型號).toLowerCase().replace(/[\s　,，、/]+/g,"/");
+    return [platform, email || lineUser || safeText(r.聯絡人).toLowerCase(), products || subject || question.slice(0,120), isoDate(r.日期)].join("|");
+  }
   return [platform, email || lineUser || safeText(r.聯絡人).toLowerCase(), subject || question.slice(0,160), isoDate(r.日期)].join("|");
 }
 function dedupe(rows){
@@ -394,41 +398,233 @@ async function fetchLineRows(start, end){
   const headers = { "Accept": "application/json" };
   const key = getLineReadKey();
   if (key) headers["X-API-Key"] = key;
+
   const r = await fetch(url, { headers });
   if (!r.ok) {
     let detail = "";
     try { const j = await r.json(); detail = j?.error || j?.message || ""; } catch (_) {}
     throw new Error("LINE API " + r.status + (detail ? " — " + detail : ""));
   }
+
   const j = await r.json();
-  return Array.isArray(j.events) ? j.events.map(lineEventToRow).filter(Boolean) : [];
+  const events = Array.isArray(j.events) ? j.events : [];
+
+  // Images are part of the conversation evidence. When an image is available,
+  // retrieve it through the Worker and run local OCR so business cards,
+  // product tables and screenshots can contribute to the same case.
+  const enriched = await enrichLineEventsWithOCR(events, base, key);
+  return buildLineConversationCases(enriched);
 }
-function lineEventToRow(ev){
-  if (!ev) return null;
-  const text = safeText(ev.text);
-  const type = safeText(ev.messageType || ev.type || "text");
-  const name = safeText(ev.displayName);
-  const c = parseLineCustomer(text, name);
-  const pseudo = { subject: "LINE", from: null, sender: null, body: { content: text } };
-  if (!text && type !== "text") return makeRow({company:"",name,phone:"",email:"",question:"LINE " + type,originalSubject:"LINE"}, {
-    date: ev.timestamp, platform:"LINE", lineUserId:safeText(ev.userId),
-    source: safeText(ev.eventId), note:"LINE訊息：" + type
-  });
-  if (!heuristicInquiry(pseudo,c)) return null;
-  return makeRow(c, {
-    date: ev.timestamp, platform:"LINE", lineUserId:safeText(ev.userId),
-    source: safeText(ev.eventId), note:"LINE智慧/規則判定：網路客戶詢問", sales:safeText(ev.salesperson)
-  });
+
+async function enrichLineEventsWithOCR(events, base, key){
+  if (!window.Tesseract) return events;
+
+  const out = events.map(e => ({...e}));
+  const candidates = out.filter(e => e?.messageType === "image" && e?.eventId).slice(-30);
+  for (const ev of candidates) {
+    try {
+      const mediaUrl = base + "/media?eventId=" + encodeURIComponent(ev.eventId);
+      const headers = { "Accept": "image/*,application/octet-stream" };
+      if (key) headers["X-API-Key"] = key;
+      const r = await fetch(mediaUrl, {headers});
+      if (!r.ok) continue;
+      const blob = await r.blob();
+      if (!blob.size) continue;
+      const result = await Tesseract.recognize(blob, "chi_tra+eng", {
+        logger: () => {}
+      });
+      ev.ocrText = safeText(result?.data?.text);
+      ev.hasOCR = !!ev.ocrText;
+    } catch (err) {
+      console.warn("LINE image OCR failed", ev.eventId, err);
+    }
+  }
+  return out;
 }
+
+function cleanLineMessageText(text){
+  return safeText(text)
+    .replace(/^\s*[-—•]\s*/,"")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function extractNumberedSix(text){
+  const lines = htmlToText(text).split("\n").map(x => x.trim()).filter(Boolean);
+  const found = {};
+  for (let i=0;i<lines.length;i++) {
+    const m = lines[i].match(/^([1-6])\s*[\.、\)）:：]\s*(.+)$/);
+    if (!m) continue;
+    found[m[1]] = m[2].trim();
+  }
+  if ([1,2,3,4,5,6].every(k => found[k])) {
+    return {
+      product: found[1],
+      company: found[2],
+      address: found[3],
+      email: found[4],
+      phone: found[5],
+      name: found[6]
+    };
+  }
+  return null;
+}
+
+function extractLineProducts(text){
+  const t = htmlToText(text);
+  const out = [];
+  const explicit = t.match(/(?:產品(?:型號|名稱)?|產品|型號|Model|Part\s*No\.?|P\/N)\s*[:：]?\s*([^\n]+)/ig) || [];
+  for (const x of explicit) {
+    const m = x.match(/[:：]\s*(.+)$/);
+    if (m?.[1]) out.push(...m[1].split(/[,，、/\n]+/).map(s=>s.trim()).filter(Boolean));
+  }
+  const generic = t.match(/\b[A-Za-z]{1,12}[-_ ]?\d{2,}[A-Za-z0-9._-]*\b|\b\d{2,}[A-Za-z]{1,12}\b/g) || [];
+  out.push(...generic);
+  return [...new Set(out.map(x => x.replace(/[，,；;。]+$/,"").trim()).filter(x => x.length>=2 && x.length<=40))];
+}
+
+function lineHasCommercialIntent(text){
+  const t = htmlToText(text).toLowerCase();
+  const keys = [
+    "報價","報價單","詢價","詢問價格","價格","多少錢","費用","報價跟交期","交期","交貨",
+    "採購","購買","訂購","下單","數量","幫我查","幫我報","開報價","請報","請報價",
+    "代理商","經銷","客人","客戶","在找這個型號","有這個嗎","有嗎","規格","料號",
+    "quote","quotation","price","lead time","purchase","order","dealer","customer"
+  ];
+  return keys.some(k => t.includes(k.toLowerCase()));
+}
+
+function lineIsAcknowledgement(text){
+  const t = cleanLineMessageText(text).replace(/[。！？!?]+$/,"");
+  return !t || /^(你好|您好|哈囉|嗨|好的|好|收到|了解|謝謝|感謝|OK|ok|嗯|可以|沒問題|再看看|稍後|掰掰)$/i.test(t);
+}
+
 function parseLineCustomer(text, displayName){
-  const t = safeText(text);
+  const t = htmlToText(text);
+  const six = extractNumberedSix(t);
+
   const email = (t.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [""])[0];
   const phone = (t.match(/(?:0\d{1,2}[-\s]?\d{6,8}(?:#\d{1,5})?|09\d{2}[-\s]?\d{3}[-\s]?\d{3})/) || [""])[0];
-  const company = (t.match(/(?:公司|公司名稱|公司名)\s*[:：]\s*([^\n]+)/i) || ["",""])[1].trim();
-  const name = (t.match(/(?:姓名|聯絡人|名字)\s*[:：]\s*([^\n]+)/i) || ["", displayName])[1].trim();
-  const question = (t.match(/(?:詢問內容|問題|需求|想詢問|請問)\s*[:：]?\s*([\s\S]+)/i) || ["",t])[1].trim();
-  return {company,name,phone,email,question,originalSubject:"LINE 網路客戶詢問"};
+  const company = (six?.company || (t.match(/(?:公司名稱|公司名|公司)\s*[:：]\s*([^\n]+)/i) || ["",""])[1] || "").trim();
+  const address = (six?.address || (t.match(/(?:地址|公司地址)\s*[:：]\s*([^\n]+)/i) || ["",""])[1] || "").trim();
+  const name = (six?.name || (t.match(/(?:姓名|聯絡人|名字)\s*[:：]\s*([^\n]+)/i) || ["", displayName])[1] || displayName).trim();
+
+  let question = "";
+  const qm = t.match(/(?:詢問內容|問題|需求|想詢問|請問|留言)\s*[:：]?\s*([\s\S]+)/i);
+  if (qm?.[1]) question = qm[1].trim();
+
+  return {
+    company,
+    address,
+    name,
+    phone: six?.phone || phone,
+    email: six?.email || email,
+    question,
+    originalSubject:"LINE 網路客戶詢問",
+    product: six?.product || ""
+  };
 }
+
+function buildLineConversationCases(events){
+  const groups = new Map();
+  const ordered = [...events].sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+
+  for (const ev of ordered) {
+    const userId = safeText(ev.userId);
+    if (!userId) continue;
+    if (!groups.has(userId)) groups.set(userId, []);
+    groups.get(userId).push(ev);
+  }
+
+  const cases = [];
+  const GAP = 6 * 60 * 60 * 1000;
+
+  for (const [userId, userEvents] of groups.entries()) {
+    let current = null;
+
+    const flush = () => {
+      if (!current) return;
+      const rawText = current.parts.join("\n");
+      const c = parseLineCustomer(rawText, current.displayName);
+      const productList = [...new Set([
+        ...extractLineProducts(rawText),
+        ...(c.product ? c.product.split(/[,，、/]+/).map(x=>x.trim()) : [])
+      ])];
+
+      const commercial = lineHasCommercialIntent(rawText);
+      const completeSix = !!extractNumberedSix(rawText);
+      const externalEvidence = !!(c.email || c.phone || c.company || c.address || c.name);
+      const hasImage = current.events.some(e => e.messageType === "image");
+      const meaningful = current.events
+        .map(e => cleanLineMessageText(e.text || e.ocrText || ""))
+        .filter(x => x && !lineIsAcknowledgement(x));
+
+      const valid = completeSix ||
+        (productList.length > 0 && commercial) ||
+        (productList.length > 0 && /代理商|經銷|客人|客戶|在找這個型號/i.test(rawText)) ||
+        (hasImage && commercial && meaningful.length > 0 && (c.company || c.name || c.phone || c.email));
+
+      if (!valid) return;
+
+      let question = meaningful
+        .filter(x => lineHasCommercialIntent(x) || extractLineProducts(x).length)
+        .join("；")
+        .trim();
+      if (!question) question = meaningful.join("；");
+      if (question.length > 1500) question = question.slice(0,1500) + "…";
+
+      const firstDate = current.events[0]?.timestamp || new Date().toISOString();
+      const row = makeRow({
+        company: c.company,
+        name: c.name || current.displayName,
+        phone: c.phone,
+        email: c.email,
+        question: question || rawText.slice(0,1500),
+        originalSubject: "LINE 網路客戶詢問"
+      }, {
+        date: firstDate,
+        platform: "LINE",
+        lineUserId: userId,
+        source: current.events.map(e=>safeText(e.eventId)).filter(Boolean).join(","),
+        note: [
+          completeSix ? "六欄客戶資料完整" : "",
+          productList.length ? "產品：" + productList.join("、") : "",
+          commercial ? "具商業詢問意圖" : "",
+          hasImage ? "含圖片/附件" : ""
+        ].filter(Boolean).join("；") || "LINE對話分析",
+        sales: safeText(current.events.find(e => safeText(e.salesperson))?.salesperson)
+      });
+      row["產品型號"] = productList.join("、");
+      row["公司地址"] = c.address || "";
+      row["客戶類型"] = /代理商|經銷/i.test(rawText) ? "代理商／經銷商" : /採購|採買/i.test(rawText) ? "採購端" : "一般客戶";
+      row["LINE分析等級"] = completeSix ? "A｜明確網路客戶" : "A｜明確網路客戶";
+      row["對話訊息數"] = current.events.length;
+      row["含圖片"] = hasImage ? "是" : "否";
+      cases.push(row);
+      current = null;
+    };
+
+    for (const ev of userEvents) {
+      const ts = new Date(ev.timestamp).getTime();
+      const textValue = [ev.text, ev.ocrText].filter(Boolean).join("\n").trim();
+      const lastTs = current?.events?.length ? new Date(current.events[current.events.length-1].timestamp).getTime() : 0;
+
+      if (!current || (lastTs && ts - lastTs > GAP)) {
+        flush();
+        current = {events: [], parts: [], displayName: safeText(ev.displayName)};
+      }
+
+      // Keep display name from the first usable event, but prefer a later non-empty value.
+      if (!current.displayName && safeText(ev.displayName)) current.displayName = safeText(ev.displayName);
+      current.events.push(ev);
+      if (textValue) current.parts.push(textValue);
+    }
+    flush();
+  }
+
+  return dedupe(cases);
+}
+
 async function graphAll(url, tok){
   const out = [];
   let next = url;
@@ -582,6 +778,20 @@ function exportExcel(){
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, xlsxSheet(state.rows), "網路客戶明細");
   XLSX.utils.book_append_sheet(wb, summarySheet(state.rows), "月份統計");
+  const lineRows = state.rows.filter(r => (r.來源平台 || "") === "LINE");
+  if (lineRows.length) {
+    const data = [["日期","產品／型號","公司名稱","公司地址","Email","電話","聯絡人","客戶類型","分析等級","對話訊息數","含圖片","詢問內容"],
+      ...lineRows.map(r => [r.日期||"",r.產品型號||"",r.公司名稱||"",r.公司地址||"",r.Email||"",r.電話||"",r.聯絡人||"",r.客戶類型||"",r.LINE分析等級||"",r.對話訊息數||"",r.含圖片||"",r.詢問內容||""])];
+    const ws = XLSX.utils.aoa_to_sheet(data);
+    ws["!cols"] = [{wch:12},{wch:24},{wch:24},{wch:34},{wch:30},{wch:18},{wch:18},{wch:16},{wch:18},{wch:12},{wch:10},{wch:60}];
+    ws["!rows"] = [{hpt:24}, ...lineRows.map(r=>({hpt:Math.min(210,Math.max(48,42+Math.ceil((r.詢問內容||"").length/55)*18))}))];
+    ws["!autofilter"] = {ref:"A1:L"+data.length};
+    for(let rr=0;rr<data.length;rr++) for(let cc=0;cc<12;cc++){
+      const cell=ws[XLSX.utils.encode_cell({r:rr,c:cc})]; if(!cell) continue;
+      cell.s={font:{name:"Microsoft JhengHei",bold:rr===0,color:rr===0?{rgb:"FFFFFF"}:undefined},fill:rr===0?{fgColor:{rgb:"4472C4"}}:undefined,alignment:{vertical:"top",wrap_text:true},border:{top:{style:"thin",color:{rgb:"D5DDE3"}},bottom:{style:"thin",color:{rgb:"D5DDE3"}},left:{style:"thin",color:{rgb:"D5DDE3"}},right:{style:"thin",color:{rgb:"D5DDE3"}}}};
+    }
+    XLSX.utils.book_append_sheet(wb, ws, "LINE客戶分析");
+  }
   const ym = getStatYM();
   const fn = "網路客戶統計_" + ym + ".xlsx";
   XLSX.writeFile(wb, fn, {compression:true});
