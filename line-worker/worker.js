@@ -28,55 +28,61 @@ function isLikelyChannelSecret(value) {
   return /^[0-9a-fA-F]{32}$/.test(String(value || "").trim());
 }
 
-function getLineCredentials(env) {
-  const configuredSecret = String(env.LINE_CHANNEL_SECRET || "").trim();
-  const configuredAccessToken = String(env.LINE_CHANNEL_ACCESS_TOKEN || "").trim();
-
-  // Common setup mistake: the two LINE values are entered into the opposite
-  // Cloudflare variables. LINE Channel Secrets are 32 hex characters, while
-  // Channel Access Tokens are substantially longer. Recover from that swap
-  // without exposing either secret.
-  if (!isLikelyChannelSecret(configuredSecret) && isLikelyChannelSecret(configuredAccessToken)) {
-    return {
-      channelSecret: configuredAccessToken,
-      accessToken: configuredSecret,
-      layout: "swapped_recovered"
-    };
+function stringBindings(env) {
+  const out = {};
+  for (const key of Object.keys(env || {})) {
+    const value = env[key];
+    if (typeof value === "string" && value.trim()) out[key] = value.trim();
   }
-
-  return {
-    channelSecret: configuredSecret,
-    accessToken: configuredAccessToken,
-    layout: "normal"
-  };
+  return out;
 }
 
+async function discoverLineCredentials(env) {
+  const bindings = stringBindings(env);
+  const namedSecret = bindings.LINE_CHANNEL_SECRET || "";
+  const namedAccess = bindings.LINE_CHANNEL_ACCESS_TOKEN || bindings.LINE_CHANNEL_ACCESS_TC || "";
 
-async function sha256Hex(value) {
-  const bytes = new TextEncoder().encode(String(value || ""));
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return Array.from(new Uint8Array(digest))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
-}
+  let channelSecret = namedSecret;
+  let secretSource = namedSecret ? "LINE_CHANNEL_SECRET" : "";
 
-async function getBotInfo(token) {
-  if (!token) return { ok: false, status: 0, id: "", userId: "", basicId: "" };
-  try {
-    const r = await fetch("https://api.line.me/v2/bot/info", {
-      headers: { Authorization: "Bearer " + token }
-    });
-    const j = await r.json().catch(() => ({}));
-    return {
-      ok: r.ok,
-      status: r.status,
-      id: j.basicId || "",
-      userId: j.userId || "",
-      basicId: j.basicId || ""
-    };
-  } catch (_) {
-    return { ok: false, status: 0, id: "", userId: "", basicId: "" };
+  if (!isLikelyChannelSecret(channelSecret)) {
+    const candidate = Object.entries(bindings).find(([key, value]) =>
+      key !== "LINE_READ_API_KEY" &&
+      isLikelyChannelSecret(value)
+    );
+    if (candidate) {
+      channelSecret = candidate[1];
+      secretSource = candidate[0];
+    }
   }
+
+  let accessToken = namedAccess;
+  let accessSource = namedAccess ? (bindings.LINE_CHANNEL_ACCESS_TOKEN ? "LINE_CHANNEL_ACCESS_TOKEN" : "LINE_CHANNEL_ACCESS_TC") : "";
+
+  // If the token variable name is wrong, discover a working LINE Bot token
+  // without exposing any token value.
+  if (accessToken && (await getBotInfo(accessToken)).ok) {
+    return { channelSecret, accessToken, secretSource, accessSource };
+  }
+
+  const candidates = Object.entries(bindings).filter(([key, value]) =>
+    key !== "LINE_CHANNEL_SECRET" &&
+    key !== "LINE_READ_API_KEY" &&
+    key !== secretSource &&
+    value.length >= 20 &&
+    value !== channelSecret
+  );
+
+  for (const [key, value] of candidates) {
+    const info = await getBotInfo(value);
+    if (info.ok) {
+      accessToken = value;
+      accessSource = key;
+      break;
+    }
+  }
+
+  return { channelSecret, accessToken, secretSource, accessSource };
 }
 
 async function getProfile(userId, token) {
@@ -153,7 +159,7 @@ async function processEvents(events, env) {
         ? (ev.message.text || "")
         : "";
 
-    const creds = getLineCredentials(env);
+    const creds = await discoverLineCredentials(env);
     const displayName =
       (ev.source?.type === "user")
         ? await getProfile(userId, creds.accessToken)
@@ -211,7 +217,7 @@ export default {
         return response({ ok: true, verify: true });
       }
 
-      const credentials = getLineCredentials(env);
+      const credentials = await discoverLineCredentials(env);
       const signatureValid = await verifySignature(credentials.channelSecret, rawBody, signature);
       const eventTypes = events.map(e => e?.type || "").filter(Boolean).join(",");
 
@@ -220,7 +226,7 @@ export default {
         eventCount: events.length,
         signaturePresent: !!signature,
         signatureValid,
-        eventTypes: eventTypes + ":" + credentials.layout,
+        eventTypes: eventTypes + ":" + (credentials.secretSource || "none") + ":" + (credentials.accessSource || "none"),
         processed: false
       });
 
@@ -291,7 +297,7 @@ export default {
           "SELECT timestamp,message_type FROM line_events ORDER BY timestamp DESC LIMIT 1"
         ).first();
 
-        const credentials = getLineCredentials(env);
+        const credentials = await discoverLineCredentials(env);
         const [secretHash, accessHash, botInfo] = await Promise.all([
           sha256Hex(credentials.channelSecret),
           sha256Hex(credentials.accessToken),
@@ -301,7 +307,10 @@ export default {
         return response({
           ok: true,
           service: "vectech-line-customer-api",
-          credentialLayout: credentials.layout,
+          credentialSource: {
+            secret: credentials.secretSource || "none",
+            accessToken: credentials.accessSource || "none"
+          },
           channelSecretLooksValid: isLikelyChannelSecret(credentials.channelSecret),
           channelSecretFingerprint: secretHash ? secretHash.slice(0, 12) : "",
           accessTokenLength: credentials.accessToken.length,
