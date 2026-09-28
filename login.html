@@ -10,7 +10,7 @@
 (async function(){
   const CLIENT_ID="3b26a125-74f9-4ee5-a412-0a175899b7b2";
   const AUTHORITY="https://login.microsoftonline.com/consumers";
-  const SCOPES=["User.Read","Mail.Read"];
+  const SCOPES=["User.Read","Mail.Read"];\n  const TARGET_MAILBOX=["vectech.cb","outlook.com"].join("@");
   const REDIRECT=location.origin+location.pathname.replace(/login\.html$/,"");
   const msg=document.getElementById("msg");
   try{
@@ -27,15 +27,16 @@
       location.replace(REDIRECT+"?auth=1");
       return;
     }
-    const account=app.getActiveAccount()||app.getAllAccounts()[0];
-    if(account){
-      app.setActiveAccount(account);
-      msg.textContent="已登入，正在回到 App…";
+    const accounts=app.getAllAccounts();
+    const target=accounts.find(a=>String(a.username||"").toLowerCase()===TARGET_MAILBOX);
+    if(target){
+      app.setActiveAccount(target);
+      msg.textContent="已找到指定統計信箱，正在回到 App…";
       location.replace(REDIRECT+"?auth=1");
       return;
     }
-    msg.textContent="正在跳轉到 Microsoft 登入頁面…";
-    await app.loginRedirect({scopes:SCOPES,prompt:"select_account",redirectUri:REDIRECT});
+    msg.textContent="請登入指定統計信箱…";
+    await app.loginRedirect({scopes:SCOPES,prompt:"select_account",loginHint:TARGET_MAILBOX,redirectUri:REDIRECT});
   }catch(e){
     console.error(e);
     msg.textContent="登入失敗："+e.message;
