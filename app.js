@@ -436,7 +436,23 @@ async function loginAndConnect(){
   }
 }
 async function runScan(){
+  const btn = byId("run");
+  if (btn) {
+    btn.disabled = true;
+    btn.style.opacity = "0.65";
+  }
   try {
+    updateStatus("正在啟動統計…");
+    if (!authReadyPromise) authReadyPromise = initAuth();
+    await authReadyPromise;
+
+    const account = msalAppInstance?.getActiveAccount() || msalAppInstance?.getAllAccounts?.()[0];
+    if (!account) {
+      updateStatus("尚未登入 Outlook，請先登入後再執行統計。");
+      alert("請先按「登入並連線 Outlook」完成登入，再執行統計。");
+      return;
+    }
+
     const tok = await getToken();
     if (!tok) return;
     const stat = getStatDate();
@@ -471,8 +487,13 @@ async function runScan(){
     updateStatus("完成：" + ymText + " 共整理 " + state.rows.length + " 筆網路客戶詢問" + lineMsg);
   } catch (e) {
     console.error(e);
-    updateStatus("掃描失敗：" + e.message);
-    alert("Outlook 掃描失敗：\n" + e.message);
+    updateStatus("掃描失敗：" + (e?.message || e));
+    alert("統計執行失敗：\n" + (e?.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.style.opacity = "";
+    }
   }
 }
 async function fetchLineRows(start, end){
@@ -1000,7 +1021,15 @@ function setup(){
   const lineReadKey = localStorage.getItem(LINE_READ_KEY) || "";
   if (byId("lineApiUrl")) byId("lineApiUrl").value = lineApi;
   if (byId("lineReadKey")) byId("lineReadKey").value = lineReadKey;
-  byId("run").addEventListener("click", runScan);
+  byId("run").addEventListener("click", async () => {
+    try {
+      await runScan();
+    } catch (e) {
+      console.error(e);
+      updateStatus("按鈕執行失敗：" + (e?.message || e));
+      alert("按「執行選定月份統計」時發生錯誤：\n" + (e?.message || e));
+    }
+  });
   byId("export").addEventListener("click", exportExcel);
   byId("saveLineApi")?.addEventListener("click", () => {
     saveLineApiUrl();
@@ -1028,7 +1057,10 @@ function setup(){
       byId("lineStatus").textContent = "連線失敗：" + e.message;
     }
   });
-  byId("connect").addEventListener("click", loginAndConnect);
+  byId("connect").addEventListener("click", (ev) => {
+    ev.preventDefault();
+    loginAndConnect();
+  });
   byId("manualOpen").addEventListener("click", openManual);
   byId("manualClose").addEventListener("click", closeManual);
   byId("statDate")?.addEventListener("change", render);
