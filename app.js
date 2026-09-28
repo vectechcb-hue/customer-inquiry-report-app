@@ -252,6 +252,25 @@ function extractSalesperson(raw, mailMeta = {}){
 function isSalesRecipient(address){
   return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
 }
+function extractOriginalCustomerMessage(body){
+  const t=htmlToText(body);
+  const markers=[
+    /開始轉寄郵件[:：]?/i,
+    /Original Message/i,
+    /^\s*-{3,}\s*$/m
+  ];
+  const positions=markers.map(re=>{const m=t.match(re);return m?m.index:-1}).filter(x=>x>=0);
+  return positions.length ? t.slice(Math.min(...positions)) : t;
+}
+function isWebInquiryRecord(m){
+  const body=extractOriginalCustomerMessage(m.body?.content || m.bodyPreview || "");
+  const labelCount=[
+    /公司名稱\s*[:：]?/i,/姓名\s*[:：]?/i,/地址\s*[:：]?/i,
+    /聯絡電話\s*[:：]?/i,/Email\s*[:：]?/i,/Website\s*[:：]?/i,/詢問內容\s*[:：]?/i
+  ].filter(re=>re.test(body)).length;
+  return labelCount>=4;
+}
+
 function isWebsiteFormText(text){
   const t=htmlToText(text)
     .replace(/\*\*/g,"")
@@ -291,17 +310,18 @@ function includeMail(m){
   const subject=safeText(m.subject);
   const body=htmlToText(m.body?.content || m.bodyPreview || "");
 
-  // 唯一來源：sales@cbtrade.com.tw 收到的「第一封網站客戶通知」。
-  // 目前這封信必須由外部客戶直接寄給 sales，且本身不是 RE/FW。
-  if(!toSales || !from || isInternalSender(from)) return false;
-  if(isFollowupSubject(subject)) return false;
-  if(!isWebsiteFormText(body)) return false;
+  // 第一種：真正的網站通知信直接寄給 sales。
+  const directFirst = toSales && !!from && !isInternalSender(from) &&
+    !isFollowupSubject(subject) && isWebInquiryRecord(m);
 
-  // 若 body 內已明確是業務往來（例如引用歷史信件），排除目前整封信，
-  // 因為我們只要第一封原始網站通知，不要後續對話。
-  const hasQuotedThread=/(?:開始轉寄郵件|Original Message|^\s*From:\s*[^\n]+\n\s*(?:Sent|日期)\s*[:：]|^\s*寄件人\s*[:：])/im.test(body);
-  if(hasQuotedThread && /(?:Hi |您好|謝謝|資訊收到|方便提供|報價|交期|出貨|付款|發票|確認|收到)/i.test(body)) return false;
-  return true;
+  // 第二種：sales 收到的「原始網站通知」之後被業務轉寄到統計信箱。
+  // 只有內文仍保留原始 From/To + 網站表單的第一封案件才納入。
+  const original = extractOriginalCustomerMessage(body);
+  const originalFrom = /(?:^|\n)\s*(?:From|寄件人)\s*[:：]?[\s\S]{0,220}?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(original);
+  const originalTo = /(?:^|\n)\s*(?:To|收件人|收件者)\s*[:：]?[\s\S]{0,120}sales@cbtrade\.com\.tw/i.test(original);
+  const forwardedFirst = originalFrom && originalTo && hasWebInquiryForm(original) && !isFollowupSubject(subject);
+
+  return directFirst || forwardedFirst;
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
