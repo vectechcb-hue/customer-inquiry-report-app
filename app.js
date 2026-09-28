@@ -3,7 +3,7 @@ const state = { rows: [], manualRows: [] };
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID = "3b26a125-74f9-4ee5-a412-0a175899b7b2";
 const AUTHORITY = "https://login.microsoftonline.com/consumers";
-const SCOPES = ["User.Read", "Mail.Read"];
+const SCOPES = ["User.Read", "Mail.Read"];\nconst TARGET_MAILBOX = ["vectech.cb","outlook.com"].join("@");
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
@@ -74,6 +74,13 @@ function saveLineApiUrl(){
   return v;
 }
 function saveManual(){ localStorage.setItem(MANUAL_KEY, JSON.stringify(state.manualRows)); }
+function isTargetAccount(account){
+  return safeText(account?.username).toLowerCase() === TARGET_MAILBOX;
+}
+function getTargetAccount(){
+  if (!msalAppInstance) return null;
+  return msalAppInstance.getAllAccounts().find(isTargetAccount) || null;
+}
 
 function field(text, regexes){
   for (const re of regexes) {
@@ -442,8 +449,10 @@ async function initAuth(){
   await msalAppInstance.initialize();
   const result = await msalAppInstance.handleRedirectPromise();
   if (result?.account) msalAppInstance.setActiveAccount(result.account);
-  const accounts = msalAppInstance.getAllAccounts();
-  if (!msalAppInstance.getActiveAccount() && accounts.length) msalAppInstance.setActiveAccount(accounts[0]);
+  const target = getTargetAccount();
+  if (target) msalAppInstance.setActiveAccount(target);
+  else if (result?.account && isTargetAccount(result.account)) msalAppInstance.setActiveAccount(result.account);
+  else msalAppInstance.setActiveAccount(null);
   if (result?.account && localStorage.getItem(AUTO_SCAN_KEY) === "1") {
     localStorage.removeItem(AUTO_SCAN_KEY);
     setTimeout(runScan, 300);
@@ -452,8 +461,12 @@ async function initAuth(){
 }
 async function getToken(){
   if (!msalAppInstance) await authReadyPromise;
-  const account = msalAppInstance.getActiveAccount() || msalAppInstance.getAllAccounts()[0];
-  if (!account) return null;
+  const account = getTargetAccount() || (isTargetAccount(msalAppInstance.getActiveAccount()) ? msalAppInstance.getActiveAccount() : null);
+  if (!account) {
+    localStorage.setItem(AUTO_SCAN_KEY, "1");
+    await msalAppInstance.loginRedirect({ scopes: SCOPES, prompt: "select_account", loginHint: TARGET_MAILBOX, redirectUri: location.origin + location.pathname });
+    return null;
+  }
   try {
     const r = await msalAppInstance.acquireTokenSilent({ account, scopes: SCOPES });
     return r.accessToken;
@@ -467,13 +480,14 @@ async function loginAndConnect(){
   try {
     updateStatus("正在準備 Microsoft 登入…");
     await authReadyPromise;
-    const account = msalAppInstance.getActiveAccount() || msalAppInstance.getAllAccounts()[0];
+    const account = getTargetAccount() || (isTargetAccount(msalAppInstance.getActiveAccount()) ? msalAppInstance.getActiveAccount() : null);
     if (!account) {
       localStorage.setItem(AUTO_SCAN_KEY, "1");
-      await msalAppInstance.loginRedirect({ scopes: SCOPES, prompt: "select_account" });
+      await msalAppInstance.loginRedirect({ scopes: SCOPES, prompt: "select_account", loginHint: TARGET_MAILBOX, redirectUri: location.origin + location.pathname });
       return;
     }
-    updateStatus("已登入 Outlook，可開始掃描本月郵件。");
+    msalAppInstance.setActiveAccount(account);
+    updateStatus("已連線指定統計信箱，可開始掃描。");
   } catch (e) {
     console.error(e);
     updateStatus("登入準備失敗：" + e.message);
@@ -488,10 +502,10 @@ async function runScan(){
     if(!authReadyPromise) authReadyPromise=initAuth();
     await authReadyPromise;
 
-    const account=msalAppInstance?.getActiveAccount() || msalAppInstance?.getAllAccounts?.()[0];
+    const account=getTargetAccount() || (isTargetAccount(msalAppInstance?.getActiveAccount()) ? msalAppInstance.getActiveAccount() : null);
     if(!account){
-      updateStatus("尚未登入 Outlook，請先登入。");
-      alert("目前尚未登入 Outlook。\\n請先按「登入並連線 Outlook」，完成 Microsoft 授權後再執行統計。");
+      updateStatus("尚未登入指定統計信箱。");
+      alert("目前尚未登入 Outlook。\\n請先按「登入／切換統計信箱」，完成 Microsoft 授權後再執行統計。");
       return;
     }
 
@@ -1007,10 +1021,10 @@ function setup(){
       const justLoggedIn = new URLSearchParams(location.search).get("auth") === "1";
       if (acct && justLoggedIn) {
         history.replaceState({}, document.title, location.pathname);
-        updateStatus("Outlook 登入成功，正在自動掃描本月郵件…");
+        updateStatus("已登入指定統計信箱，正在自動掃描本月郵件…");
         setTimeout(runScan, 200);
       } else {
-        updateStatus(acct ? "Outlook 已登入，可開始掃描本月郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
+        updateStatus(acct ? "指定統計信箱已登入，可開始掃描本月郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
       }
     })
     .catch(e => {
