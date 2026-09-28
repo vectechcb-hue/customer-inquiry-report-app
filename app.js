@@ -5,6 +5,8 @@ const CLIENT_ID = "3b26a125-74f9-4ee5-a412-0a175899b7b2";
 const AUTHORITY = "https://login.microsoftonline.com/consumers";
 const SCOPES = ["User.Read", "Mail.Read"];
 const TARGET_MAILBOX = ["vectech.cb","outlook.com"].join("@");
+// Microsoft Graph 的「收件匣」固定使用 well-known folder ID：inbox；這不是另一個郵件來源。
+const MAIL_FOLDER_ID = "inbox";
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
@@ -527,7 +529,7 @@ async function runScan(){
     const to=encodeURIComponent(end.toISOString());
     const select="id,internetMessageId,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
 
-    const inbox=GRAPH+"/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20"+from+"%20and%20receivedDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
+    const inbox=GRAPH+"/me/mailFolders/" + MAIL_FOLDER_ID + "/messages?$filter=receivedDateTime%20ge%20"+from+"%20and%20receivedDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
 
     const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
 
@@ -1015,17 +1017,17 @@ function setup(){
   }
   byId("addManual").addEventListener("click", addManual);
   render();
-  updateStatus("正在準備 Outlook 連線…");
+  updateStatus("正在準備 Outlook 收件匣連線…");
   authReadyPromise = initAuth()
     .then(() => {
       const acct = msalAppInstance.getActiveAccount();
       const justLoggedIn = new URLSearchParams(location.search).get("auth") === "1";
       if (acct && justLoggedIn) {
         history.replaceState({}, document.title, location.pathname);
-        updateStatus("已登入指定統計信箱，正在自動掃描本月郵件…");
+        updateStatus("已登入指定統計信箱，正在自動掃描本月收件匣郵件…");
         setTimeout(runScan, 200);
       } else {
-        updateStatus(acct ? "指定統計信箱已登入，可開始掃描本月郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
+        updateStatus(acct ? "指定統計信箱已登入，可開始掃描本月收件匣郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
       }
     })
     .catch(e => {
