@@ -231,9 +231,19 @@ function extractSalesperson(raw, mailMeta = {}){
   }
   return "";
 }
+function emailAddressList(m){
+  return [
+    addr(m.from), addr(m.sender),
+    ...(m.toRecipients || []).map(addr),
+    ...(m.ccRecipients || []).map(addr)
+  ].filter(Boolean);
+}
 function includeMail(m){
-  const from = addr(m.from) || addr(m.sender);
-  return from === "sales@cbtrade.com.tw" || safeText(m.subject).includes("聯絡我們");
+  const sales = "sales@cbtrade.com.tw";
+  const routedToSales = emailAddressList(m).includes(sales);
+  const body = htmlToText(m.body?.content || m.bodyPreview || "");
+  const forwardedSales = /(?:^|\n)\s*(?:From|寄件者)\s*[:：]?\s*[^\n]*sales@cbtrade\.com\.tw/i.test(body);
+  return routedToSales || forwardedSales;
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -268,28 +278,56 @@ function makeRow(c,meta={}){
     詢問內容: c.question || "",
     原始主旨: c.originalSubject || "",
     來源郵件: meta.source || "",
+    Outlook郵件ID: meta.messageId || "",
+    InternetMessageId: meta.internetMessageId || "",
     處理狀態: meta.status || "待處理",
     備註: meta.note || "",
     業務人員: meta.sales || ""
   };
 }
+function normalizeInquiryText(v){
+  return safeText(v)
+    .toLowerCase()
+    .replace(/[\s\u3000]+/g," ")
+    .replace(/^(?:fw|fwd|re|轉寄|轉發|回覆)\s*[:：-]?\s*/gi,"")
+    .replace(/[^\p{L}\p{N}\-_.@/ ]/gu,"")
+    .trim();
+}
+function extractInquiryProducts(r){
+  const t = normalizeInquiryText([r.原始主旨 || "", r.詢問內容 || ""].join(" "));
+  const hits = t.match(/\b[a-z]{1,15}[-_ ]?\d{2,}[a-z0-9._-]*\b|\b\d{2,}[a-z]{1,15}\b/gi) || [];
+  return [...new Set(hits.map(x=>x.replace(/\s+/g,"").toLowerCase()))].sort();
+}
 function rowKey(r){
+  const platform = safeText(r.來源平台 || "Outlook");
   const email = safeText(r.Email).toLowerCase();
   const lineUser = safeText(r.LINE用戶ID);
-  const platform = safeText(r.來源平台 || "Outlook");
-  const subject = cleanSubject(r.原始主旨).replace(/[\s　]+/g," ").toLowerCase();
-  const question = safeText(r.詢問內容).replace(/[\s　]+/g," ").toLowerCase();
+  const company = normalizeInquiryText(r.公司名稱);
+  const contact = normalizeInquiryText(r.聯絡人);
+  const phone = safeText(r.電話).replace(/\D/g,"");
+  const subject = normalizeInquiryText(cleanSubject(r.原始主旨));
+  const question = normalizeInquiryText(r.詢問內容);
   if (platform === "LINE") {
-    const products = safeText(r.產品型號).toLowerCase().replace(/[\s　,，、/]+/g,"/");
-    return [platform, email || lineUser || safeText(r.聯絡人).toLowerCase(), products || subject || question.slice(0,120), isoDate(r.日期)].join("|");
+    const products = safeText(r.產品型號).toLowerCase().replace(/[\s\u3000,，、/]+/g,"/");
+    return [platform, email || lineUser || contact, products || subject || question.slice(0,120), isoDate(r.日期)].join("|");
   }
-  return [platform, email || lineUser || safeText(r.聯絡人).toLowerCase(), subject || question.slice(0,160), isoDate(r.日期)].join("|");
+  const identity = email || phone || company || contact || "unknown";
+  const products = extractInquiryProducts(r);
+  const topic = products.length ? products.join("/") : (subject || question.slice(0,180));
+  return [platform, identity, topic].join("|");
+}
+function rowCompleteness(r){
+  return [
+    r.公司名稱, r.聯絡人, r.Email, r.電話, r.公司地址,
+    r.詢問內容, r.業務人員, r.原始主旨
+  ].reduce((n,v)=>n+(safeText(v)?1:0),0)*10000 + safeText(r.詢問內容).length;
 }
 function dedupe(rows){
   const map = new Map();
   for (const r of rows) {
-    const old = map.get(rowKey(r));
-    if (!old || safeText(r.詢問內容).length > safeText(old.詢問內容).length) map.set(rowKey(r), r);
+    const key = rowKey(r);
+    const old = map.get(key);
+    if (!old || rowCompleteness(r) > rowCompleteness(old)) map.set(key, r);
   }
   return [...map.values()];
 }
@@ -300,6 +338,8 @@ function mailToRow(m){
   return makeRow(c, {
     date: m.receivedDateTime || m.sentDateTime,
     source: m.webLink || "",
+    messageId: m.id || "",
+    internetMessageId: m.internetMessageId || "",
     platform: "Outlook",
     note: heuristicInquiry(m,c) ? "智慧/規則判定：網路客戶詢問" : "智慧/規則判定：需確認",
     sales: salesperson
@@ -426,11 +466,11 @@ async function runScan(){
     const end=new Date(stat.getFullYear(),stat.getMonth()+1,1);
     const ymText=formatYM(getStatYM());
 
-    updateStatus("已登入 Outlook，正在掃描 "+ymText+"…");
+    updateStatus("已登入 Outlook，正在掃描 "+ymText+"；僅分析與 sales@cbtrade.com.tw 有關的郵件…");
 
     const from=encodeURIComponent(start.toISOString());
     const to=encodeURIComponent(end.toISOString());
-    const select="subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
+    const select="id,internetMessageId,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
 
     const inbox=GRAPH+"/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20"+from+"%20and%20receivedDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
     const sent=GRAPH+"/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20"+from+"%20and%20sentDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=sentDateTime%20desc";
@@ -440,7 +480,7 @@ async function runScan(){
     updateStatus("正在讀取 Outlook 郵件…");
     const [a,b,lineRows]=await Promise.all([graphAll(inbox,tok),graphAll(sent,tok),linePromise]);
 
-    updateStatus("正在分析 Outlook 客戶資料…");
+    updateStatus("正在分析 Outlook 客戶資料；自動分類公司、聯絡人、電話與詢問內容，並去除重複…");
     const scanned=[...a,...b]
       .filter(includeMail)
       .filter(m=>!noiseMail(m))
