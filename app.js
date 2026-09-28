@@ -268,7 +268,11 @@ function isWebInquiryRecord(m){
     /公司名稱\s*[:：]?/i,/姓名\s*[:：]?/i,/地址\s*[:：]?/i,
     /聯絡電話\s*[:：]?/i,/Email\s*[:：]?/i,/Website\s*[:：]?/i,/詢問內容\s*[:：]?/i
   ].filter(re=>re.test(body)).length;
-  return labelCount>=4;
+  // 實際網站通知常有 4+ 欄位；對於「請提供報價單」這類非表單的第一封客戶信，
+  // 另外要求它直接寄給 sales 且具有明確產品/詢價意圖。
+  const subject=safeText(m.subject);
+  const commercial=/詢價|報價|價格|採購|購買|詢問|請問|規格|交期|產品|設備|機台|焊接|返修|bga|solder|quote|quotation|inquiry|purchase|price|lead time/i.test(subject+" "+body);
+  return labelCount>=4 || (labelCount>=1 && commercial && isSalesRecipient(addr((m.toRecipients||[]).find(Boolean))));
 }
 
 function isWebsiteFormText(text){
