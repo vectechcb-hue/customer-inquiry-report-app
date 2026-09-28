@@ -231,19 +231,10 @@ function extractSalesperson(raw, mailMeta = {}){
   }
   return "";
 }
-function emailAddressList(m){
-  return [
-    addr(m.from), addr(m.sender),
-    ...(m.toRecipients || []).map(addr),
-    ...(m.ccRecipients || []).map(addr)
-  ].filter(Boolean);
-}
 function includeMail(m){
-  const sales = "sales@cbtrade.com.tw";
-  const routedToSales = emailAddressList(m).includes(sales);
-  const body = htmlToText(m.body?.content || m.bodyPreview || "");
-  const forwardedSales = /(?:^|\n)\s*(?:From|寄件者)\s*[:：]?\s*[^\n]*sales@cbtrade\.com\.tw/i.test(body);
-  return routedToSales || forwardedSales;
+  // Outlook 統計唯一來源：真正的寄件人（From）必須完全等於 sales@cbtrade.com.tw。
+  // 收件人、CC、主旨、轉寄內容中出現 sales@cbtrade.com.tw 均不算。
+  return addr(m.from) === "sales@cbtrade.com.tw";
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -473,15 +464,14 @@ async function runScan(){
     const select="id,internetMessageId,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
 
     const inbox=GRAPH+"/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20"+from+"%20and%20receivedDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
-    const sent=GRAPH+"/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20"+from+"%20and%20sentDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=sentDateTime%20desc";
 
     const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
 
-    updateStatus("正在讀取 Outlook 郵件…");
-    const [a,b,lineRows]=await Promise.all([graphAll(inbox,tok),graphAll(sent,tok),linePromise]);
+    updateStatus("正在讀取 Outlook 收件匣；唯一寄件人為 sales@cbtrade.com.tw…");
+    const [a,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
 
     updateStatus("正在分析 Outlook 客戶資料；自動分類公司、聯絡人、電話與詢問內容，並去除重複…");
-    const scanned=[...a,...b]
+    const scanned=[...a]
       .filter(includeMail)
       .filter(m=>!noiseMail(m))
       .map(m=>{
