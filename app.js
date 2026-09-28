@@ -7,7 +7,6 @@ const SCOPES = ["User.Read", "Mail.Read"];
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
-const LINE_HISTORY_KEY = "vectech_line_history_import_v1";
 const AUTO_SCAN_KEY = "vectech_auto_scan_after_login_v1";
 
 let msalAppInstance = null;
@@ -47,10 +46,6 @@ function loadManual(){
     const x = JSON.parse(localStorage.getItem(MANUAL_KEY) || "[]");
     state.manualRows = Array.isArray(x) ? x : [];
   } catch (_) { state.manualRows = []; }
-  try {
-    const x = JSON.parse(localStorage.getItem(LINE_HISTORY_KEY) || "[]");
-    if (Array.isArray(x) && x.length) state.manualRows.push(...x);
-  } catch (_) {}
 }
 function normalizeLineApiUrl(value){
   let v = safeText(value).replace(/\s+/g,"");
@@ -87,119 +82,41 @@ function field(text, regexes){
   }
   return "";
 }
-function firstLabeled(text, labels){
-  for (const label of labels) {
-    const re = new RegExp("(?:^|\\n)\\s*" + label + "\\s*[:：]?\\s*([^\\n]+)", "i");
-    const m = text.match(re);
-    if (m?.[1]) return m[1].trim();
-  }
-  return "";
-}
-function normalizePhone(v){
-  return safeText(v)
-    .replace(/(?:TEL|電話|聯絡電話|手機|Mobile|Phone)\\s*[:：]?/ig,"")
-    .replace(/(?:FAX|傳真)\\s*[:：]?.*$/i,"")
-    .replace(/[，,；;。]+$/,"")
-    .trim();
-}
-function extractPhones(text){
-  const hits = text.match(/(?:0\\d{1,2}[-\\s]?\\d{6,8}(?:#\\d{1,5})?|09\\d{2}[-\\s]?\\d{3}[-\\s]?\\d{3})/g) || [];
-  return [...new Set(hits.map(normalizePhone).filter(x => x.length >= 8))];
-}
-function extractEmails(text){
-  return [...new Set((text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/ig) || [])
-    .map(x => x.replace(/[>，,。；;]+$/,"").trim().toLowerCase()))];
-}
-function looksLikeCompany(v){
-  return /(?:有限公司|股份有限公司|企業行|企業社|企業有限公司|科技|電子|電機|工業|實業|實業社|貿易|國際|系統|生技|醫療|工程|材料|塑膠|精密|自動化)/i.test(v || "");
-}
-function cleanCompanyCandidate(v){
-  return safeText(v)
-    .replace(/^(?:公司名稱|公司名|公司)\\s*[:：]?\\s*/i,"")
-    .replace(/\\b(?:TEL|FAX|Email|E-mail|Phone|Mobile)\\b.*$/i,"")
-    .replace(/(?:TEL|FAX|電話|傳真|手機|聯絡電話)\\s*[:：]?[^\\n]*/ig,"")
-    .replace(/\\s{2,}/g," ")
-    .trim();
-}
-function extractCompany(text, fallbackSubject){
-  const labeled = firstLabeled(text, ["公司名稱","公司名","公司"]);
-  if (looksLikeCompany(labeled)) return cleanCompanyCandidate(labeled);
-
-  const lines = text.split("\\n").map(x => x.trim()).filter(Boolean);
-  const candidates = lines
-    .map(cleanCompanyCandidate)
-    .filter(x =>
-      x.length >= 3 &&
-      x.length <= 60 &&
-      looksLikeCompany(x) &&
-      !/@/.test(x) &&
-      !/^(?:TEL|FAX|電話|傳真|手機|地址|Email|E-mail|Website|網站)/i.test(x)
-    );
-  if (candidates.length) return candidates[0];
-
-  return "";
-}
-function extractContactName(text, mailMeta, fallbackDisplay = ""){
-  const labeled = firstLabeled(text, ["姓名","聯絡人","聯絡姓名","窗口"]);
-  if (labeled && labeled.length <= 40) return labeled.replace(/[，,。；;]+$/,"").trim();
-
-  // 常見簽名格式：Email 前一行或公司資訊前的中文姓名。
-  const lines = text.split("\\n").map(x => x.trim()).filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (/^(?:TEL|FAX|電話|傳真|手機|聯絡電話|Email|E-mail|Website|網站|地址|公司名稱|公司)/i.test(line)) continue;
-    if (/@/.test(line) || /https?:\\/\\//i.test(line)) continue;
-    if (/^09\\d{8}$|^0\\d{1,2}[-\\s]?\\d{6,8}$/i.test(line)) continue;
-    if (/^[\\u4e00-\\u9fff]{2,5}(?:\\s+[A-Za-z]{2,20})?$/.test(line)) return line;
-    const m = line.match(/(?:我是|姓名|聯絡人)\\s*[:：]?\\s*([\\u4e00-\\u9fff]{2,5})/i);
-    if (m?.[1]) return m[1];
-  }
-
-  const metaName = safeText(mailMeta?.from?.emailAddress?.name || mailMeta?.sender?.emailAddress?.name);
-  if (metaName && !/承邦|VECTECH|威鐵克/i.test(metaName)) return metaName;
-  return fallbackDisplay;
-}
-function extractQuestionText(text){
-  const normalized = htmlToText(text).replace(/\\u00a0/g," ");
-  const explicit = normalized.match(/(?:詢問內容|問題|需求|留言|Message|Inquiry)\\s*[:：]?\\s*([\\s\\S]+?)(?=(?:Website|網站|公司名稱|公司名|公司電話|聯絡電話|電話|Email|E-mail|姓名|聯絡人|地址|TEL|FAX)\\s*[:：]?|$)/i);
-  if (explicit?.[1]) return explicit[1].trim();
-
-  const lines = normalized.split("\\n").map(x => x.trim()).filter(Boolean);
-  const out = [];
-  for (const line of lines) {
-    if (!line) continue;
-    if (/^(?:From|寄件者|To|收件者|Cc|主旨|Subject|Sent|日期|Date)\\s*[:：]/i.test(line)) continue;
-    if (/^(?:公司名稱|公司名|公司|姓名|聯絡人|地址|公司地址|聯絡電話|公司電話|電話|手機|TEL|FAX|Email|E-mail|Website|網站)\\s*[:：]?/i.test(line)) continue;
-    if (/@[A-Z0-9.-]+\\.[A-Z]{2,}/i.test(line) && /(?:TEL|FAX|Email|E-mail)/i.test(line)) continue;
-    if (/^(?:承邦有限公司|VECTECH|威鐵克)/i.test(line)) continue;
-    if (/^[-_]{3,}$/.test(line)) continue;
-    out.push(line);
-  }
-  return out.join("\\n").trim();
-}
-function parseCustomer(raw, subject, mailMeta = {}){
+function parseCustomer(raw, subject){
   const t = htmlToText(raw);
-  const company = extractCompany(t, subject);
-  const name = extractContactName(t, mailMeta, "");
-  const emails = extractEmails(t);
-  const phones = extractPhones(t);
-  const labeledPhone = firstLabeled(t, ["公司電話","聯絡電話","電話","TEL","Phone","手機","Mobile"]);
-  const phone = normalizePhone(labeledPhone || phones[0] || "");
-  const email = firstLabeled(t, ["Email","E-mail"]) || emails[0] || "";
-  const address = firstLabeled(t, ["公司地址","地址","Address"]);
-  const question = extractQuestionText(t);
-
-  const originalSubject = firstLabeled(t, ["原始主旨","Subject"]) || cleanSubject(subject);
-
-  return {
-    company: cleanCompanyCandidate(company),
-    name: safeText(name).replace(/[，,。；;]+$/,"").trim(),
-    phone,
-    email: safeText(email).replace(/[>，,。；;]+$/,"").trim().toLowerCase(),
-    address: safeText(address),
-    question: question.length > 2000 ? question.slice(0,2000) + "…" : question,
-    originalSubject
-  };
+  let company = field(t, [
+    /公司名稱\s*[:：]?\s*([^\n]+?)(?=\s*(?:姓名|Name|地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /公司\s*[:：]?\s*([^\n]+?)(?=\s*(?:姓名|Name|地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /^\s*([^\n]+?)\s*(?=姓名\s*[:：])/i
+  ]);
+  let name = field(t, [
+    /姓名\s*[:：]?\s*([^\n]+?)(?=\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /聯絡人\s*[:：]?\s*([^\n]+?)(?=\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /Name\s*[:：]?\s*([^\n]+?)(?=\s*(?:Address|Phone|Email|Website)\s*[:：]?|$)/i
+  ]);
+  let phone = field(t, [
+    /聯絡電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /公司電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
+    /Phone\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website)\s*[:：]?|$)/i
+  ]);
+  let email = field(t, [
+    /Email\s*[:：]?\s*([^\s\n<>|]+)/i,
+    /E-mail\s*[:：]?\s*([^\s\n<>|]+)/i
+  ]).replace(/[>，,。；;]+$/,"");
+  let question = field(t, [
+    /詢問內容\s*[:：]?\s*([\s\S]+?)(?=\s*(?:Website|網站)\s*[:：]?|$)/i,
+    /留言\s*[:：]?\s*([\s\S]+?)(?=\s*(?:Website|網站)\s*[:：]?|$)/i
+  ]);
+  const originalSubject = field(t, [
+    /原始主旨\s*[:：]?\s*([^\n]+)/i,
+    /Subject\s*[:：]?\s*([^\n]+)/i
+  ]) || cleanSubject(subject);
+  company = company.replace(/\s*(?:姓名|Name)\s*[:：].*$/i,"").trim();
+  name = name.replace(/\s*(?:地址|Address)\s*[:：].*$/i,"").trim();
+  phone = phone.replace(/\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：].*$/i,"").trim();
+  question = question.replace(/\s*(?:Website|網站)\s*[:：]?.*$/is,"").trim();
+  return { company, name, phone, email, question, originalSubject };
 }
 
 const SALES_NAMES = ["CHRIS","ALEX","ALAN","NEIL"];
@@ -299,7 +216,6 @@ function makeRow(c,meta={}){
     聯絡人: c.name || "",
     Email: c.email || "",
     電話: c.phone || "",
-    公司地址: c.address || "",
     詢問內容: c.question || "",
     原始主旨: c.originalSubject || "",
     來源郵件: meta.source || "",
@@ -436,66 +352,72 @@ async function loginAndConnect(){
   }
 }
 async function runScan(){
-  const btn = byId("run");
-  if (btn) {
-    btn.disabled = true;
-    btn.style.opacity = "0.65";
-  }
-  try {
+  const btn=byId("run");
+  if(btn){btn.disabled=true;btn.textContent="⏳ 統計執行中…";btn.style.opacity="0.65";}
+  try{
     updateStatus("正在啟動統計…");
-    if (!authReadyPromise) authReadyPromise = initAuth();
+    if(!authReadyPromise) authReadyPromise=initAuth();
     await authReadyPromise;
 
-    const account = msalAppInstance?.getActiveAccount() || msalAppInstance?.getAllAccounts?.()[0];
-    if (!account) {
-      updateStatus("尚未登入 Outlook，請先登入後再執行統計。");
-      alert("請先按「登入並連線 Outlook」完成登入，再執行統計。");
+    const account=msalAppInstance?.getActiveAccount() || msalAppInstance?.getAllAccounts?.()[0];
+    if(!account){
+      updateStatus("尚未登入 Outlook，請先登入。");
+      alert("目前尚未登入 Outlook。\\n請先按「登入並連線 Outlook」，完成 Microsoft 授權後再執行統計。");
       return;
     }
 
-    const tok = await getToken();
-    if (!tok) return;
-    const stat = getStatDate();
-    const start = new Date(stat.getFullYear(), stat.getMonth(), 1);
-    const end = new Date(stat.getFullYear(), stat.getMonth() + 1, 1);
-    const ymText = formatYM(getStatYM());
-    updateStatus("已登入，正在掃描 " + ymText + " Outlook 網路客戶郵件…");
-    const from = encodeURIComponent(start.toISOString());
-    const to = encodeURIComponent(end.toISOString());
-    const select = "subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
-    const inbox = GRAPH + "/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20" + from + "%20and%20receivedDateTime%20lt%20" + to + "&$top=100&$select=" + select + "&$orderby=receivedDateTime%20desc";
-    const sent = GRAPH + "/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20" + from + "%20and%20sentDateTime%20lt%20" + to + "&$top=100&$select=" + select + "&$orderby=sentDateTime%20desc";
-    const linePromise = fetchLineRows(start, end).catch(e => {
-      console.warn(e);
-      updateStatus("Outlook 掃描中；LINE 暫時無法取得：" + e.message);
-      return [];
-    });
-    const [a,b,lineRows] = await Promise.all([graphAll(inbox,tok), graphAll(sent,tok), linePromise]);
-    const scanned = [...a,...b]
+    const tok=await getToken();
+    if(!tok){
+      updateStatus("正在等待 Outlook 授權…");
+      return;
+    }
+
+    const stat=getStatDate();
+    const start=new Date(stat.getFullYear(),stat.getMonth(),1);
+    const end=new Date(stat.getFullYear(),stat.getMonth()+1,1);
+    const ymText=formatYM(getStatYM());
+
+    updateStatus("已登入 Outlook，正在掃描 "+ymText+"…");
+
+    const from=encodeURIComponent(start.toISOString());
+    const to=encodeURIComponent(end.toISOString());
+    const select="subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
+
+    const inbox=GRAPH+"/me/mailFolders('Inbox')/messages?$filter=receivedDateTime%20ge%20"+from+"%20and%20receivedDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
+    const sent=GRAPH+"/me/mailFolders('SentItems')/messages?$filter=sentDateTime%20ge%20"+from+"%20and%20sentDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=sentDateTime%20desc";
+
+    const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
+
+    updateStatus("正在讀取 Outlook 郵件…");
+    const [a,b,lineRows]=await Promise.all([graphAll(inbox,tok),graphAll(sent,tok),linePromise]);
+
+    updateStatus("正在分析 Outlook 客戶資料…");
+    const scanned=[...a,...b]
       .filter(includeMail)
-      .filter(m => !noiseMail(m))
-      .map(m => {
-        const raw = m.body?.content || m.bodyPreview || "";
-        const c = parseCustomer(raw, m.subject);
-        if (isInternalOnly(m,c) || !heuristicInquiry(m,c)) return null;
+      .filter(m=>!noiseMail(m))
+      .map(m=>{
+        const raw=m.body?.content || m.bodyPreview || "";
+        const c=parseCustomer(raw,m.subject,m);
+        if(isInternalOnly(m,c) || !heuristicInquiry(m,c)) return null;
         return mailToRow(m);
       })
       .filter(Boolean);
-    state.rows = dedupe([...selectedMonthRows(), ...scanned, ...lineRows]);
+
+    state.rows=dedupe([...selectedMonthRows(),...scanned,...lineRows]);
     render();
-    const lineMsg = getLineApiUrl() ? "；LINE " + lineRows.length + " 筆" : "；LINE 尚未設定";
-    updateStatus("完成：" + ymText + " 共整理 " + state.rows.length + " 筆網路客戶詢問" + lineMsg);
-  } catch (e) {
+
+    const lineMsg=getLineApiUrl() ? "；LINE "+lineRows.length+" 筆" : "；LINE 尚未設定";
+    updateStatus("完成："+ymText+" 共整理 "+state.rows.length+" 筆網路客戶詢問"+lineMsg);
+  }catch(e){
     console.error(e);
-    updateStatus("掃描失敗：" + (e?.message || e));
-    alert("統計執行失敗：\n" + (e?.message || e));
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.style.opacity = "";
-    }
+    const msg=e?.message || String(e);
+    updateStatus("統計失敗："+msg);
+    alert("統計執行失敗：\\n"+msg+"\\n\\n請確認 Outlook 已登入並允許 Mail.Read。");
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent="🔄 執行選定月份統計";btn.style.opacity="";}
   }
 }
+
 async function fetchLineRows(start, end){
   const base = getLineApiUrl();
   if (!base) return [];
@@ -664,17 +586,12 @@ function buildLineConversationCases(events){
         .map(e => cleanLineMessageText(e.text || e.ocrText || ""))
         .filter(x => x && !lineIsAcknowledgement(x));
 
-      const contactEvidence = !!(c.email || c.phone || c.company || c.address || c.name);
-      const productEvidence = productList.length > 0;
-      const relationshipEvidence = /代理商|經銷|經銷商|客人|客戶|在找這個型號|採購/i.test(rawText);
       const valid = completeSix ||
-        (productEvidence && commercial) ||
-        (productEvidence && relationshipEvidence) ||
-        (commercial && contactEvidence) ||
-        (hasImage && commercial && meaningful.length > 0) ||
-        commercial;
+        (productList.length > 0 && commercial) ||
+        (productList.length > 0 && /代理商|經銷|客人|客戶|在找這個型號/i.test(rawText)) ||
+        (hasImage && commercial && meaningful.length > 0 && (c.company || c.name || c.phone || c.email));
 
-      if (!valid || meaningful.length === 0) return;
+      if (!valid) return;
 
       let question = meaningful
         .filter(x => lineHasCommercialIntent(x) || extractLineProducts(x).length)
@@ -707,9 +624,7 @@ function buildLineConversationCases(events){
       row["產品型號"] = productList.join("、");
       row["公司地址"] = c.address || "";
       row["客戶類型"] = /代理商|經銷/i.test(rawText) ? "代理商／經銷商" : /採購|採買/i.test(rawText) ? "採購端" : "一般客戶";
-      row["LINE分析等級"] = completeSix || (productList.length > 0 && commercial) || (commercial && contactEvidence)
-        ? "A｜明確網路客戶"
-        : "B｜疑似網路客戶｜待確認";
+      row["LINE分析等級"] = completeSix ? "A｜明確網路客戶" : "A｜明確網路客戶";
       row["對話訊息數"] = current.events.length;
       row["含圖片"] = hasImage ? "是" : "否";
       cases.push(row);
@@ -735,101 +650,6 @@ function buildLineConversationCases(events){
   }
 
   return dedupe(cases);
-}
-
-
-function parseCsvRows(text){
-  const rows = [];
-  let row = [], cell = "", quoted = false;
-  for(let i=0;i<text.length;i++){
-    const ch = text[i];
-    const next = text[i+1];
-    if(ch === '"'){
-      if(quoted && next === '"'){ cell += '"'; i++; continue; }
-      quoted = !quoted; continue;
-    }
-    if(ch === "," && !quoted){ row.push(cell); cell=""; continue; }
-    if((ch === "\n" || ch === "\r") && !quoted){
-      if(ch === "\r" && next === "\n") i++;
-      row.push(cell); cell="";
-      if(row.some(v => safeText(v))) rows.push(row);
-      row=[];
-      continue;
-    }
-    cell += ch;
-  }
-  row.push(cell);
-  if(row.some(v => safeText(v))) rows.push(row);
-  return rows;
-}
-
-function pickCsvIndex(headers, patterns){
-  for(const p of patterns){
-    const i = headers.findIndex(h => p.test(safeText(h)));
-    if(i >= 0) return i;
-  }
-  return -1;
-}
-
-function parseLineHistoryCsv(text){
-  const rows = parseCsvRows(text);
-  if(rows.length < 2) return [];
-  const headers = rows[0].map(x => safeText(x).replace(/^\uFEFF/,""));
-  const iTime = pickCsvIndex(headers,[/日期|時間|時間戳|timestamp/i]);
-  const iUser = pickCsvIndex(headers,[/聊天室.?id|用戶.?id|使用者.?id|user.?id|chat.?id/i]);
-  const iName = pickCsvIndex(headers,[/用戶名稱|使用者名稱|顧客名稱|姓名|暱稱|name|display/i]);
-  const iSender = pickCsvIndex(headers,[/發送者|傳送者|sender|角色|來源/i]);
-  const iText = pickCsvIndex(headers,[/訊息內容|訊息|留言|內容|message|text|chat/i]);
-
-  const events = [];
-  for(let r=1;r<rows.length;r++){
-    const cells = rows[r];
-    const text = safeText(iText >= 0 ? cells[iText] : cells[0]);
-    if(!text) continue;
-
-    const sender = safeText(iSender >= 0 ? cells[iSender] : "");
-    if(/承邦|VECTECH|威鐵克|官方帳號|店家|客服/i.test(sender)) continue;
-
-    const rawTime = safeText(iTime >= 0 ? cells[iTime] : "");
-    const d = rawTime ? new Date(rawTime) : new Date();
-    const timestamp = isNaN(d) ? new Date().toISOString() : d.toISOString();
-
-    const userId = safeText(iUser >= 0 ? cells[iUser] : "") || safeText(iName >= 0 ? cells[iName] : "") || ("csv-user-" + r);
-    const displayName = safeText(iName >= 0 ? cells[iName] : "");
-    events.push({
-      eventId: "csv-" + r,
-      userId,
-      timestamp,
-      messageType: "text",
-      text,
-      displayName,
-      salesperson: ""
-    });
-  }
-
-  return buildLineConversationCases(events);
-}
-
-async function importLineHistoryCsv(file){
-  if(!file) return;
-  updateStatus("正在讀取 LINE 歷史聊天 CSV…");
-  const text = await file.text();
-  const cases = parseLineHistoryCsv(text);
-  if(!cases.length){
-    throw new Error("CSV 中沒有解析出可判定的 LINE 客戶詢問；請確認匯出的欄位包含日期/時間、訊息內容與聊天室或用戶資訊。");
-  }
-
-  // Imported history is stored as local records so it is merged with live
-  // webhook data and remains available on this device.
-  const imported = cases.map(r => ({...r, _lineHistoryImport:true, 備註:(r.備註 ? r.備註 + "；" : "") + "LINE歷史聊天匯入"}));
-  state.manualRows = state.manualRows.filter(r => !r._lineHistoryImport);
-  state.manualRows.push(...imported);
-  const persistent = state.manualRows.filter(r => r._lineHistoryImport);
-  localStorage.setItem(LINE_HISTORY_KEY, JSON.stringify(persistent));
-  saveManual();
-  state.rows = dedupe([...selectedMonthRows(), ...state.rows.filter(r => (r.來源平台||"") !== "LINE"), ...imported]);
-  render();
-  updateStatus("LINE 歷史聊天匯入完成：" + cases.length + " 筆案件。可再執行選定月份統計與 Outlook 合併。");
 }
 
 async function graphAll(url, tok){
@@ -882,7 +702,7 @@ function extractDateFromRaw(raw){
 }
 function parseManual(){
   const raw = safeText(byId("mRaw").value);
-  const c = parseCustomer(raw, byId("mSubject").value, {});
+  const c = parseCustomer(raw, byId("mSubject").value);
   const parsedDate = extractDateFromRaw(raw);
   if (parsedDate) byId("mDate").value = parsedDate;
   byId("mSubject").value = c.originalSubject || byId("mSubject").value;
@@ -921,18 +741,8 @@ function xlsxSheet(rows){
   const headers = ["日期","公司名稱","聯絡人","公司電話","詢問內容","業務人員","是否成交","成交金額"];
   const data = [headers, ...rows.map(r => [r.日期 || "", r.公司名稱 || "", r.聯絡人 || "", r.電話 || "", r.詢問內容 || "", r.業務人員 || "", r.是否成交 || "", r.成交金額 || ""])];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{wch:12},{wch:28},{wch:18},{wch:20},{wch:68},{wch:14},{wch:12},{wch:14}];
-  ws["!rows"] = [{hpt:26}, ...rows.map(r => ({
-    hpt: Math.min(
-      240,
-      Math.max(
-        58,
-        42 +
-        Math.ceil((String(r.詢問內容 || "").length) / 42) * 18 +
-        Math.ceil((String(r.公司名稱 || "").length) / 18) * 12
-      )
-    )
-  }))];
+  ws["!cols"] = [{wch:12},{wch:24},{wch:18},{wch:22},{wch:72},{wch:14},{wch:12},{wch:14}];
+  ws["!rows"] = [{hpt:24}, ...rows.map(r => ({ hpt: Math.min(210, Math.max(60, 42 + Math.ceil((r.詢問內容 || "").length / 55) * 18)) }))];
   ws["!autofilter"] = { ref: "A1:H" + data.length };
   const headerStyle = { font:{name:"Microsoft JhengHei",bold:true,color:{rgb:"FFFFFF"}}, fill:{fgColor:{rgb:"4472C4"}}, alignment:{horizontal:"center",vertical:"center",wrap_text:true}, border:{top:{style:"thin",color:{rgb:"B7C9D6"}},bottom:{style:"thin",color:{rgb:"B7C9D6"}},left:{style:"thin",color:{rgb:"B7C9D6"}},right:{style:"thin",color:{rgb:"B7C9D6"}}} };
   for (let c=0;c<8;c++) ws[XLSX.utils.encode_cell({r:0,c})].s = headerStyle;
@@ -1021,30 +831,17 @@ function setup(){
   const lineReadKey = localStorage.getItem(LINE_READ_KEY) || "";
   if (byId("lineApiUrl")) byId("lineApiUrl").value = lineApi;
   if (byId("lineReadKey")) byId("lineReadKey").value = lineReadKey;
-  byId("run").addEventListener("click", async () => {
-    try {
-      await runScan();
-    } catch (e) {
+  byId("run").addEventListener("click", () => {
+    runScan().catch(e => {
       console.error(e);
       updateStatus("按鈕執行失敗：" + (e?.message || e));
-      alert("按「執行選定月份統計」時發生錯誤：\n" + (e?.message || e));
-    }
+      alert("執行統計時發生錯誤：\n" + (e?.message || e));
+    });
   });
   byId("export").addEventListener("click", exportExcel);
   byId("saveLineApi")?.addEventListener("click", () => {
     saveLineApiUrl();
     updateStatus(getLineApiUrl() ? "LINE API 已儲存，可執行選定月份統計測試。" : "LINE API 設定已清除。");
-  });
-  byId("importLineCsv")?.addEventListener("click", async () => {
-    try {
-      const file = byId("lineHistoryCsv")?.files?.[0];
-      if (!file) throw new Error("請先選擇 LINE 聊天紀錄 CSV");
-      await importLineHistoryCsv(file);
-    } catch (e) {
-      console.error(e);
-      updateStatus("LINE 歷史聊天匯入失敗：" + e.message);
-      alert("LINE 歷史聊天匯入失敗：\n" + e.message);
-    }
   });
   byId("testLineApi")?.addEventListener("click", async () => {
     try {
@@ -1057,10 +854,7 @@ function setup(){
       byId("lineStatus").textContent = "連線失敗：" + e.message;
     }
   });
-  byId("connect").addEventListener("click", (ev) => {
-    ev.preventDefault();
-    loginAndConnect();
-  });
+  byId("connect").addEventListener("click", loginAndConnect);
   byId("manualOpen").addEventListener("click", openManual);
   byId("manualClose").addEventListener("click", closeManual);
   byId("statDate")?.addEventListener("change", render);
