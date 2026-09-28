@@ -77,8 +77,16 @@ function saveLineApiUrl(){
   return v;
 }
 function saveManual(){ localStorage.setItem(MANUAL_KEY, JSON.stringify(state.manualRows)); }
+function accountEmails(account){
+  return [
+    account?.username,
+    account?.idTokenClaims?.preferred_username,
+    account?.idTokenClaims?.email,
+    account?.idTokenClaims?.upn
+  ].map(v=>safeText(v).toLowerCase()).filter(Boolean);
+}
 function isTargetAccount(account){
-  return safeText(account?.username).toLowerCase() === TARGET_MAILBOX;
+  return accountEmails(account).includes(TARGET_MAILBOX);
 }
 function getTargetAccount(){
   if (!msalAppInstance) return null;
@@ -450,15 +458,22 @@ async function initAuth(){
     cache: { cacheLocation: "localStorage" }
   });
   await msalAppInstance.initialize();
+
+  // 先處理 Microsoft redirect 回傳；不要因帳號名稱不一致就立刻再次 redirect，
+  // 避免手機出現「一直跳出登入視窗」的迴圈。
   const result = await msalAppInstance.handleRedirectPromise();
   if (result?.account) msalAppInstance.setActiveAccount(result.account);
+
   const target = getTargetAccount();
   if (target) msalAppInstance.setActiveAccount(target);
-  else if (result?.account && isTargetAccount(result.account)) msalAppInstance.setActiveAccount(result.account);
-  else msalAppInstance.setActiveAccount(null);
-  if (result?.account && localStorage.getItem(AUTO_SCAN_KEY) === "1") {
+
+  const active = msalAppInstance.getActiveAccount();
+  const shouldAutoScan = !!target && !!result?.account && localStorage.getItem(AUTO_SCAN_KEY) === "1";
+  if (shouldAutoScan) {
     localStorage.removeItem(AUTO_SCAN_KEY);
     setTimeout(runScan, 300);
+  } else if (result?.account && !target) {
+    localStorage.removeItem(AUTO_SCAN_KEY);
   }
   return msalAppInstance;
 }
@@ -466,16 +481,22 @@ async function getToken(){
   if (!msalAppInstance) await authReadyPromise;
   const account = getTargetAccount() || (isTargetAccount(msalAppInstance.getActiveAccount()) ? msalAppInstance.getActiveAccount() : null);
   if (!account) {
-    localStorage.setItem(AUTO_SCAN_KEY, "1");
-    await msalAppInstance.loginRedirect({ scopes: SCOPES, prompt: "select_account", loginHint: TARGET_MAILBOX, redirectUri: location.origin + location.pathname });
+    updateStatus("尚未登入指定統計信箱：" + TARGET_MAILBOX + "。");
     return null;
   }
   try {
     const r = await msalAppInstance.acquireTokenSilent({ account, scopes: SCOPES });
     return r.accessToken;
-  } catch (_) {
+  } catch (err) {
+    console.warn("Silent token failed", err);
+    // 僅在真正需要授權且由使用者操作後才導向 Microsoft，避免自動登入迴圈。
     localStorage.setItem(AUTO_SCAN_KEY, "1");
-    await msalAppInstance.acquireTokenRedirect({ account, scopes: SCOPES, prompt: "select_account" });
+    await msalAppInstance.acquireTokenRedirect({
+      account,
+      scopes: SCOPES,
+      prompt: "select_account",
+      redirectUri: location.origin + location.pathname
+    });
     return null;
   }
 }
@@ -483,14 +504,21 @@ async function loginAndConnect(){
   try {
     updateStatus("正在準備 Microsoft 登入…");
     await authReadyPromise;
-    const account = getTargetAccount() || (isTargetAccount(msalAppInstance.getActiveAccount()) ? msalAppInstance.getActiveAccount() : null);
-    if (!account) {
-      localStorage.setItem(AUTO_SCAN_KEY, "1");
-      await msalAppInstance.loginRedirect({ scopes: SCOPES, prompt: "select_account", loginHint: TARGET_MAILBOX, redirectUri: location.origin + location.pathname });
+
+    const target = getTargetAccount();
+    if (target) {
+      msalAppInstance.setActiveAccount(target);
+      updateStatus("已連線指定統計信箱：" + TARGET_MAILBOX + "。");
       return;
     }
-    msalAppInstance.setActiveAccount(account);
-    updateStatus("已連線指定統計信箱，可開始掃描。");
+
+    // 使用者明確按下登入時才重新選擇帳號；不在初始化階段自行循環跳轉。
+    await msalAppInstance.loginRedirect({
+      scopes: SCOPES,
+      prompt: "select_account",
+      loginHint: TARGET_MAILBOX,
+      redirectUri: location.origin + location.pathname
+    });
   } catch (e) {
     console.error(e);
     updateStatus("登入準備失敗：" + e.message);
@@ -1027,7 +1055,7 @@ function setup(){
         updateStatus("已登入指定統計信箱，正在自動掃描本月收件匣郵件…");
         setTimeout(runScan, 200);
       } else {
-        updateStatus(acct ? "指定統計信箱已登入，可開始掃描本月收件匣郵件。" : "尚未登入 Outlook，請按「登入並連線 Outlook」。");
+        updateStatus(acct ? "指定統計信箱已登入，可開始掃描本月收件匣郵件。" : "尚未登入指定統計信箱，請按「登入／切換統計帳號」。");
       }
     })
     .catch(e => {
