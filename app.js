@@ -4,7 +4,7 @@ const GRAPH = "https://graph.microsoft.com/v1.0";
 const CLIENT_ID = "3b26a125-74f9-4ee5-a412-0a175899b7b2";
 const AUTHORITY = "https://login.microsoftonline.com/consumers";
 const SCOPES = ["User.Read", "Mail.Read"];
-const TARGET_MAILBOX = ["vectech.cb","outlook.com"].join("@");
+const TARGET_MAILBOX = ["cbtrade0411","outlook.com"].join("@");
 // Microsoft Graph 的「收件匣」固定使用 well-known folder ID：inbox；這不是另一個郵件來源。
 const MAIL_FOLDER_ID = "inbox";
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
