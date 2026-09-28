@@ -235,7 +235,10 @@ function isSalesRecipient(address){
   return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
 }
 function hasWebInquiryForm(text, subject=""){
-  const t=htmlToText(text);
+  const t=htmlToText(text)
+    .replace(/\\*\\*/g,"")
+    .replace(/^>+/gm,"")
+    .replace(/\|/g," ");
   const formLabels=[
     /公司名稱\s*[:：]?/i,
     /姓名\s*[:：]?/i,
@@ -255,7 +258,10 @@ function externalCustomerSender(address){
   return !/(?:@cbtrade\.com\.tw|@msa\.hinet\.net|@ms39\.hinet\.net)$/i.test(a);
 }
 function hasOriginalSalesHeader(text){
-  return /(?:^|\n)\s*(?:To|收件人|收件者)\s*[:：]?[^\n]*sales@cbtrade\.com\.tw/i.test(text);
+  // 轉寄內容常見格式：> **To:** sales@...、**To:** [sales@...](mailto:...)
+  // 允許 Markdown 粗體、引用符號及連結包裝，但仍要求原始收件人是 sales。
+  return /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*sales@cbtrade\.com\.tw/i.test(text)
+    || /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*\[?sales@cbtrade\.com\.tw\]?/i.test(text);
 }
 function includeMail(m){
   // 只收集「寄給 sales@cbtrade.com.tw 的網站網路客戶」。
@@ -507,6 +513,7 @@ async function runScan(){
     const scanned=[...a]
       .filter(includeMail)
       .filter(m=>!noiseMail(m))
+      .filter(m=>!!m.id)
       .map(m=>{
         const raw=m.body?.content || m.bodyPreview || "";
         const c=parseCustomer(raw,m.subject,m);
