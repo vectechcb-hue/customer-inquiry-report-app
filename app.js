@@ -231,10 +231,43 @@ function extractSalesperson(raw, mailMeta = {}){
   }
   return "";
 }
+function isSalesRecipient(address){
+  return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
+}
+function hasWebInquiryForm(text, subject=""){
+  const t=htmlToText(text);
+  const formLabels=[
+    /公司名稱\s*[:：]?/i,
+    /姓名\s*[:：]?/i,
+    /地址\s*[:：]?/i,
+    /聯絡電話\s*[:：]?/i,
+    /Email\s*[:：]?/i,
+    /Website\s*[:：]?/i,
+    /詢問內容\s*[:：]?/i
+  ];
+  const labelCount=formLabels.filter(re=>re.test(t)).length;
+  const webSubject=/聯絡我們|contact us/i.test(safeText(subject));
+  return labelCount >= 3 || (webSubject && labelCount >= 2);
+}
+function externalCustomerSender(address){
+  const a=safeText(address).toLowerCase();
+  if(!a) return false;
+  return !/(?:@cbtrade\.com\.tw|@msa\.hinet\.net|@ms39\.hinet\.net)$/i.test(a);
+}
+function hasOriginalSalesHeader(text){
+  return /(?:^|\n)\s*(?:To|收件人|收件者)\s*[:：]?[^\n]*sales@cbtrade\.com\.tw/i.test(text);
+}
 function includeMail(m){
-  // Outlook 統計唯一來源：真正的寄件人（From）必須完全等於 sales@cbtrade.com.tw。
-  // 收件人、CC、主旨、轉寄內容中出現 sales@cbtrade.com.tw 均不算。
-  return addr(m.from) === "sales@cbtrade.com.tw";
+  // 只收集「寄給 sales@cbtrade.com.tw 的網站網路客戶」。
+  // 直接進 sales 收件匣：To 必須是 sales，寄件人必須是外部客戶，且符合網站表單。
+  // 若之後被轉寄到統計信箱：內文必須保留原始 To=sales 且仍符合網站表單。
+  const directTo=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
+  const body=htmlToText(m.body?.content || m.bodyPreview || "");
+  const originalToSales=hasOriginalSalesHeader(body);
+  const form=hasWebInquiryForm(body,m.subject);
+  const directCustomer=directTo && externalCustomerSender(addr(m.from));
+  const forwardedWebCustomer=originalToSales && form;
+  return form && (directCustomer || forwardedWebCustomer);
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -467,7 +500,7 @@ async function runScan(){
 
     const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
 
-    updateStatus("正在讀取 Outlook 收件匣；唯一寄件人為 sales@cbtrade.com.tw…");
+    updateStatus("正在讀取 Outlook 收件匣；只分析寄給 sales@cbtrade.com.tw 的網站網路客戶…");
     const [a,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
 
     updateStatus("正在分析 Outlook 客戶資料；自動分類公司、聯絡人、電話與詢問內容，並去除重複…");
