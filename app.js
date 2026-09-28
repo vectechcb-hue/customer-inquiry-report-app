@@ -250,7 +250,7 @@ function hasWebInquiryForm(text, subject=""){
   ];
   const labelCount=formLabels.filter(re=>re.test(t)).length;
   const webSubject=/聯絡我們|contact us/i.test(safeText(subject));
-  return labelCount >= 3 || (webSubject && labelCount >= 2);
+  return labelCount >= 4 || (webSubject && labelCount >= 3);
 }
 function externalCustomerSender(address){
   const a=safeText(address).toLowerCase();
@@ -258,22 +258,42 @@ function externalCustomerSender(address){
   return !/(?:@cbtrade\.com\.tw|@msa\.hinet\.net|@ms39\.hinet\.net)$/i.test(a);
 }
 function hasOriginalSalesHeader(text){
-  // 轉寄內容常見格式：> **To:** sales@...、**To:** [sales@...](mailto:...)
-  // 允許 Markdown 粗體、引用符號及連結包裝，但仍要求原始收件人是 sales。
   return /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*sales@cbtrade\.com\.tw/i.test(text)
     || /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*\[?sales@cbtrade\.com\.tw\]?/i.test(text);
 }
+function isFirstInboundInquiry(m){
+  const subject=safeText(m.subject);
+  // 統計只保留第一封客戶網站通知；RE/FW/轉寄/回覆的後續業務往來全部排除。
+  if (/^\s*(?:re|fw|fwd|回覆|轉寄|轉發)\s*[:：]/i.test(subject)) return false;
+  return true;
+}
+function extractOriginalInboundBlock(text){
+  const t=htmlToText(text).replace(/\\*\\*/g,"").replace(/^>+/gm,"");
+  const markers=[/開始轉寄郵件/i,/Original Message/i,/---+/i];
+  let pos=-1;
+  for(const m of markers){const p=t.search(m); if(p>=0){pos=p;break;}}
+  return pos>=0 ? t.slice(pos) : t;
+}
+function containsOriginalInboundSalesForm(text){
+  const t=extractOriginalInboundBlock(text);
+  const fromCustomer=/(?:^|\n)\s*[>*#\s]*\**(?:From|寄件人)\**\s*[:：]?[^\n]*(?:<[^>\n]+@[^>\n]+>|\b[^\s<>]+@[^\s<>]+\b)/i.test(t);
+  const toSales=hasOriginalSalesHeader(t);
+  const form=hasWebInquiryForm(t);
+  return fromCustomer && toSales && form;
+}
 function includeMail(m){
-  // 只收集「寄給 sales@cbtrade.com.tw 的網站網路客戶」。
-  // 直接進 sales 收件匣：To 必須是 sales，寄件人必須是外部客戶，且符合網站表單。
-  // 若之後被轉寄到統計信箱：內文必須保留原始 To=sales 且仍符合網站表單。
-  const directTo=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
   const body=htmlToText(m.body?.content || m.bodyPreview || "");
-  const originalToSales=hasOriginalSalesHeader(body);
-  const form=hasWebInquiryForm(body,m.subject);
-  const directCustomer=directTo && externalCustomerSender(addr(m.from));
-  const forwardedWebCustomer=originalToSales && form;
-  return form && (directCustomer || forwardedWebCustomer);
+  const directTo=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
+  const from=addr(m.from);
+
+  // ① 真正第一封：外部客戶直接寄到 sales，且信件本身不是 RE/FW。
+  const directFirst = directTo && externalCustomerSender(from) && hasWebInquiryForm(body,m.subject) && isFirstInboundInquiry(m);
+
+  // ② 已被內部人轉寄到統計信箱：只有內文存在「原始客戶 From + 原始 To=sales + 網站表單」，
+  // 且目前這封不是 RE/FW，才納入。業務與客戶之間後續回覆一律排除。
+  const forwardedFirst = containsOriginalInboundSalesForm(body) && isFirstInboundInquiry(m);
+
+  return directFirst || forwardedFirst;
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -496,7 +516,7 @@ async function runScan(){
     const end=new Date(stat.getFullYear(),stat.getMonth()+1,1);
     const ymText=formatYM(getStatYM());
 
-    updateStatus("已登入 Outlook，正在掃描 "+ymText+"；僅分析與 sales@cbtrade.com.tw 有關的郵件…");
+    updateStatus("已登入 Outlook，嚴格只抓第一封「客戶→sales@cbtrade.com.tw」網站詢問，後續 RE/FW 全部排除…");
 
     const from=encodeURIComponent(start.toISOString());
     const to=encodeURIComponent(end.toISOString());
@@ -506,7 +526,7 @@ async function runScan(){
 
     const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
 
-    updateStatus("正在讀取 Outlook 收件匣；只分析寄給 sales@cbtrade.com.tw 的網站網路客戶…");
+    updateStatus("正在讀取 Outlook；第一封客戶網站詢問才納入，後續業務往來全部排除…");
     const [a,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
 
     updateStatus("正在分析 Outlook 客戶資料；自動分類公司、聯絡人、電話與詢問內容，並去除重複…");
