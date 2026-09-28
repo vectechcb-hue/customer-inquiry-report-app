@@ -82,44 +82,93 @@ function field(text, regexes){
   }
   return "";
 }
-function parseCustomer(raw, subject){
-  const t = htmlToText(raw);
-  let company = field(t, [
-    /公司名稱\s*[:：]?\s*([^\n]+?)(?=\s*(?:姓名|Name|地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /公司\s*[:：]?\s*([^\n]+?)(?=\s*(?:姓名|Name|地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /^\s*([^\n]+?)\s*(?=姓名\s*[:：])/i
-  ]);
-  let name = field(t, [
-    /姓名\s*[:：]?\s*([^\n]+?)(?=\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /聯絡人\s*[:：]?\s*([^\n]+?)(?=\s*(?:地址|Address|聯絡電話|電話|Phone|Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /Name\s*[:：]?\s*([^\n]+?)(?=\s*(?:Address|Phone|Email|Website)\s*[:：]?|$)/i
-  ]);
-  let phone = field(t, [
-    /聯絡電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /公司電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /電話\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：]?|$)/i,
-    /Phone\s*[:：]?\s*([^\n]+?)(?=\s*(?:Email|E-mail|Website)\s*[:：]?|$)/i
-  ]);
-  let email = field(t, [
-    /Email\s*[:：]?\s*([^\s\n<>|]+)/i,
-    /E-mail\s*[:：]?\s*([^\s\n<>|]+)/i
-  ]).replace(/[>，,。；;]+$/,"");
-  let question = field(t, [
-    /詢問內容\s*[:：]?\s*([\s\S]+?)(?=\s*(?:Website|網站)\s*[:：]?|$)/i,
-    /留言\s*[:：]?\s*([\s\S]+?)(?=\s*(?:Website|網站)\s*[:：]?|$)/i
-  ]);
-  const originalSubject = field(t, [
-    /原始主旨\s*[:：]?\s*([^\n]+)/i,
-    /Subject\s*[:：]?\s*([^\n]+)/i
-  ]) || cleanSubject(subject);
-  company = company.replace(/\s*(?:姓名|Name)\s*[:：].*$/i,"").trim();
-  name = name.replace(/\s*(?:地址|Address)\s*[:：].*$/i,"").trim();
-  phone = phone.replace(/\s*(?:Email|E-mail|Website|網站|詢問內容|留言)\s*[:：].*$/i,"").trim();
-  question = question.replace(/\s*(?:Website|網站)\s*[:：]?.*$/is,"").trim();
-  return { company, name, phone, email, question, originalSubject };
+function firstLabeled(text, labels){
+  for(const label of labels){
+    const re=new RegExp("(?:^|\\n)\\s*" + label + "\\s*[:：]?\\s*([^\\n]+)","i");
+    const m=text.match(re);
+    if(m?.[1]) return m[1].trim();
+  }
+  return "";
+}
+function extractEmails(text){
+  return [...new Set((htmlToText(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[])
+    .map(x=>x.replace(/[>，,。；;]+$/,"").trim().toLowerCase()))];
+}
+function extractPhones(text){
+  const hits=htmlToText(text).match(/(?:0\d{1,2}[-\s]?\d{6,8}(?:#\d{1,5})?|09\d{2}[-\s]?\d{3}[-\s]?\d{3})/g)||[];
+  return [...new Set(hits.map(x=>x.replace(/[，,；;。]+$/,"").trim()).filter(x=>x.length>=8))];
+}
+function looksLikeCompany(v){
+  return /(?:有限公司|股份有限公司|企業行|企業社|科技|電子|電機|工業|實業|貿易|國際|系統|生技|醫療|工程|材料|塑膠|精密|自動化)/i.test(v||"");
+}
+function cleanCompanyCandidate(v){
+  return safeText(v)
+    .replace(/^(?:公司名稱|公司名|公司)\s*[:：]?\s*/i,"")
+    .replace(/\b(?:TEL|FAX|Email|E-mail|Phone|Mobile)\b.*$/i,"")
+    .replace(/(?:TEL|FAX|電話|傳真|手機|聯絡電話)\s*[:：]?\s*[^\n]*/ig,"")
+    .replace(/\s{2,}/g," ")
+    .trim();
+}
+function extractCompany(text){
+  const labeled=firstLabeled(text,["公司名稱","公司名","公司"]);
+  if(labeled) return cleanCompanyCandidate(labeled);
+  const lines=htmlToText(text).split("\n").map(x=>x.trim()).filter(Boolean);
+  const candidates=lines.filter(x=>x.length>=3&&x.length<=60&&looksLikeCompany(x)&&!/@/.test(x)&&! /^(?:TEL|FAX|電話|傳真|手機|地址|Email|E-mail|Website|網站|詢問內容|留言)/i.test(x));
+  return candidates[0]||"";
+}
+function extractContactName(text,mailMeta={}){
+  const labeled=firstLabeled(text,["姓名","聯絡人","聯絡姓名","窗口"]);
+  if(labeled&&labeled.length<=40) return labeled.replace(/[，,。；;]+$/,"").trim();
+  const lines=htmlToText(text).split("\n").map(x=>x.trim()).filter(Boolean);
+  for(let i=lines.length-1;i>=0;i--){
+    const line=lines[i];
+    if(!line||/^(?:TEL|FAX|電話|傳真|手機|聯絡電話|Email|E-mail|Website|網站|地址|公司名稱|公司|From|To|Subject|寄件者|收件者|主旨)/i.test(line)) continue;
+    if(/@/.test(line)||/https?:\/\/+/i.test(line)) continue;
+    if(/^09\d{8}$|^0\d{1,2}[-\s]?\d{6,8}$/i.test(line)) continue;
+    if(/^[\u4e00-\u9fff]{2,5}(?:\s+[A-Za-z]{2,20})?$/.test(line)) return line;
+  }
+  const metaName=safeText(mailMeta?.from?.emailAddress?.name||mailMeta?.sender?.emailAddress?.name);
+  if(metaName&&!/承邦|VECTECH|威鐵克/i.test(metaName)) return metaName;
+  return "";
+}
+function extractQuestionText(text){
+  const normalized=htmlToText(text).replace(/\u00a0/g," ");
+  const explicit=normalized.match(/(?:詢問內容|問題|需求|留言|Message|Inquiry)\s*[:：]?\s*([\s\S]+?)(?=(?:Website|網站|公司名稱|公司名|公司電話|聯絡電話|電話|Email|E-mail|姓名|聯絡人|地址|TEL|FAX)\s*[:：]?|$)/i);
+  if(explicit?.[1]) return explicit[1].trim();
+  const lines=normalized.split("\n").map(x=>x.trim()).filter(Boolean);
+  const out=[];
+  for(const line of lines){
+    if(/^(?:From|寄件者|To|收件者|Cc|主旨|Subject|Sent|日期|Date)\s*[:：]/i.test(line)) continue;
+    if(/^(?:公司名稱|公司名|公司|姓名|聯絡人|地址|公司地址|聯絡電話|公司電話|電話|手機|TEL|FAX|Email|E-mail|Website|網站)\s*[:：]?/i.test(line)) continue;
+    if(/^(?:承邦有限公司|VECTECH|威鐵克)/i.test(line)) continue;
+    if(!line) continue;
+    out.push(line);
+  }
+  return out.join("\n").trim();
+}
+function parseCustomer(raw,subject,mailMeta={}){
+  const t=htmlToText(raw);
+  const company=extractCompany(t);
+  const name=extractContactName(t,mailMeta);
+  const emails=extractEmails(t);
+  const phones=extractPhones(t);
+  const phone=firstLabeled(t,["公司電話","聯絡電話","電話","TEL","Phone","手機","Mobile"])||phones[0]||"";
+  const email=firstLabeled(t,["Email","E-mail"])||emails[0]||"";
+  const address=firstLabeled(t,["公司地址","地址","Address"])||"";
+  const question=extractQuestionText(t);
+  const originalSubject=firstLabeled(t,["原始主旨","Subject"])||cleanSubject(subject);
+  return {
+    company:cleanCompanyCandidate(company),
+    name:safeText(name).replace(/[，,。；;]+$/,"").trim(),
+    phone:safeText(phone).replace(/[，,。；;]+$/,"").trim(),
+    email:safeText(email).replace(/[>，,。；;]+$/,"").trim().toLowerCase(),
+    address:safeText(address),
+    question:question.length>2000?question.slice(0,2000)+"…":question,
+    originalSubject
+  };
 }
 
-const SALES_NAMES = ["CHRIS","ALEX","ALAN","NEIL"];
+
 function extractSalesperson(raw, mailMeta = {}){
   const t = htmlToText(raw);
   const outerFrom = addr(mailMeta.from) || addr(mailMeta.sender);
