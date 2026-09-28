@@ -234,12 +234,12 @@ function extractSalesperson(raw, mailMeta = {}){
 function isSalesRecipient(address){
   return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
 }
-function hasWebInquiryForm(text, subject=""){
+function isWebsiteFormText(text){
   const t=htmlToText(text)
-    .replace(/\\*\\*/g,"")
+    .replace(/\*\*/g,"")
     .replace(/^>+/gm,"")
-    .replace(/\|/g," ");
-  const formLabels=[
+    .replace(/\r/g,"");
+  const labels=[
     /公司名稱\s*[:：]?/i,
     /姓名\s*[:：]?/i,
     /地址\s*[:：]?/i,
@@ -248,52 +248,42 @@ function hasWebInquiryForm(text, subject=""){
     /Website\s*[:：]?/i,
     /詢問內容\s*[:：]?/i
   ];
-  const labelCount=formLabels.filter(re=>re.test(t)).length;
-  const webSubject=/聯絡我們|contact us/i.test(safeText(subject));
-  return labelCount >= 4 || (webSubject && labelCount >= 3);
+  return labels.filter(re=>re.test(t)).length >= 4;
 }
-function externalCustomerSender(address){
+function isSalesRecipient(address){
+  return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
+}
+function isInternalSender(address){
   const a=safeText(address).toLowerCase();
-  if(!a) return false;
-  return !/(?:@cbtrade\.com\.tw|@msa\.hinet\.net|@ms39\.hinet\.net)$/i.test(a);
+  return !a || /@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(a);
+}
+function normalizeSubjectKey(v){
+  return cleanSubject(v).toLowerCase().replace(/\s+/g," ").trim();
+}
+function isFollowupSubject(v){
+  return /^\s*(?:re|fw|fwd|回覆|轉寄|轉發)\s*[:：-]/i.test(safeText(v));
 }
 function hasOriginalSalesHeader(text){
-  return /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*sales@cbtrade\.com\.tw/i.test(text)
-    || /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*\[?sales@cbtrade\.com\.tw\]?/i.test(text);
-}
-function isFirstInboundInquiry(m){
-  const subject=safeText(m.subject);
-  // 統計只保留第一封客戶網站通知；RE/FW/轉寄/回覆的後續業務往來全部排除。
-  if (/^\s*(?:re|fw|fwd|回覆|轉寄|轉發)\s*[:：]/i.test(subject)) return false;
-  return true;
-}
-function extractOriginalInboundBlock(text){
-  const t=htmlToText(text).replace(/\\*\\*/g,"").replace(/^>+/gm,"");
-  const markers=[/開始轉寄郵件/i,/Original Message/i,/---+/i];
-  let pos=-1;
-  for(const m of markers){const p=t.search(m); if(p>=0){pos=p;break;}}
-  return pos>=0 ? t.slice(pos) : t;
-}
-function containsOriginalInboundSalesForm(text){
-  const t=extractOriginalInboundBlock(text);
-  const fromCustomer=/(?:^|\n)\s*[>*#\s]*\**(?:From|寄件人)\**\s*[:：]?[^\n]*(?:<[^>\n]+@[^>\n]+>|\b[^\s<>]+@[^\s<>]+\b)/i.test(t);
-  const toSales=hasOriginalSalesHeader(t);
-  const form=hasWebInquiryForm(t);
-  return fromCustomer && toSales && form;
+  const t=htmlToText(text);
+  return /(?:^|\n)\s*[>*#\s]*\**(?:To|收件人|收件者)\**\s*[:：]?[^\n]*sales@cbtrade\.com\.tw/i.test(t);
 }
 function includeMail(m){
-  const body=htmlToText(m.body?.content || m.bodyPreview || "");
-  const directTo=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
   const from=addr(m.from);
+  const toSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
+  const subject=safeText(m.subject);
+  const body=htmlToText(m.body?.content || m.bodyPreview || "");
 
-  // ① 真正第一封：外部客戶直接寄到 sales，且信件本身不是 RE/FW。
-  const directFirst = directTo && externalCustomerSender(from) && hasWebInquiryForm(body,m.subject) && isFirstInboundInquiry(m);
+  // 唯一來源：sales@cbtrade.com.tw 收到的「第一封網站客戶通知」。
+  // 目前這封信必須由外部客戶直接寄給 sales，且本身不是 RE/FW。
+  if(!toSales || !from || isInternalSender(from)) return false;
+  if(isFollowupSubject(subject)) return false;
+  if(!isWebsiteFormText(body)) return false;
 
-  // ② 已被內部人轉寄到統計信箱：只有內文存在「原始客戶 From + 原始 To=sales + 網站表單」，
-  // 且目前這封不是 RE/FW，才納入。業務與客戶之間後續回覆一律排除。
-  const forwardedFirst = containsOriginalInboundSalesForm(body) && isFirstInboundInquiry(m);
-
-  return directFirst || forwardedFirst;
+  // 若 body 內已明確是業務往來（例如引用歷史信件），排除目前整封信，
+  // 因為我們只要第一封原始網站通知，不要後續對話。
+  const hasQuotedThread=/(?:開始轉寄郵件|Original Message|^\s*From:\s*[^\n]+\n\s*(?:Sent|日期)\s*[:：]|^\s*寄件人\s*[:：])/im.test(body);
+  if(hasQuotedThread && /(?:Hi |您好|謝謝|資訊收到|方便提供|報價|交期|出貨|付款|發票|確認|收到)/i.test(body)) return false;
+  return true;
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -529,7 +519,7 @@ async function runScan(){
     updateStatus("正在讀取 Outlook；第一封客戶網站詢問才納入，後續業務往來全部排除…");
     const [a,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
 
-    updateStatus("正在分析 Outlook 客戶資料；自動分類公司、聯絡人、電話與詢問內容，並去除重複…");
+    updateStatus("正在分析 sales@cbtrade.com.tw 第一封網站客戶通知；後續 RE/FW 與業務往來全部排除…");
     const scanned=[...a]
       .filter(includeMail)
       .filter(m=>!noiseMail(m))
@@ -542,7 +532,7 @@ async function runScan(){
       })
       .filter(Boolean);
 
-    state.rows=dedupe([...selectedMonthRows(),...scanned,...lineRows]);
+    state.rows=dedupe([...scanned,...lineRows]);
     render();
 
     const lineMsg=getLineApiUrl() ? "；LINE "+lineRows.length+" 筆" : "；LINE 尚未設定";
