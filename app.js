@@ -250,12 +250,9 @@ function extractSalesperson(raw, mailMeta = {}){
   return "";
 }
 function isWebInquiryText(text){
-  const t = htmlToText(text).replace(/\\*\\*/g,"").replace(/^>+/gm,"").replace(/\\r/g,"");
-  const labels = [
-    /公司名稱\\s*[:：]?/i,/姓名\\s*[:：]?/i,/地址\\s*[:：]?/i,
-    /聯絡電話\\s*[:：]?/i,/Email\\s*[:：]?/i,/Website\\s*[:：]?/i,/詢問內容\\s*[:：]?/i
-  ];
-  return labels.filter(re=>re.test(t)).length >= 4;
+  const t = htmlToText(text).replace(/^\s*>+/gm,"").toLowerCase();
+  const labels = ["公司名稱","姓名","地址","聯絡電話","email","website","詢問內容"];
+  return labels.filter(label => t.includes(label.toLowerCase())).length >= 4;
 }
 function isSalesRecipient(address){
   return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
@@ -271,18 +268,15 @@ function extractOriginalCustomerMessage(body){
   return positions.length ? t.slice(Math.min(...positions)) : t;
 }
 function isWebInquiryRecord(m){
-  const body=extractOriginalCustomerMessage(m.body?.content || m.bodyPreview || "");
-  const labelCount=[
-    /公司名稱\s*[:：]?/i,/姓名\s*[:：]?/i,/地址\s*[:：]?/i,
-    /聯絡電話\s*[:：]?/i,/Email\s*[:：]?/i,/Website\s*[:：]?/i,/詢問內容\s*[:：]?/i
-  ].filter(re=>re.test(body)).length;
-  // 實際網站通知常有 4+ 欄位；對於「請提供報價單」這類非表單的第一封客戶信，
-  // 另外要求它直接寄給 sales 且具有明確產品/詢價意圖。
+  const body=htmlToText(m.body?.content || m.bodyPreview || "");
+  const labelCount=["公司名稱","姓名","地址","聯絡電話","email","website","詢問內容"]
+    .filter(label=>body.toLowerCase().includes(label.toLowerCase())).length;
   const subject=safeText(m.subject);
+  const subjectIsInquiry=/聯絡我們/i.test(subject);
   const commercial=/詢價|報價|價格|採購|購買|詢問|請問|規格|交期|產品|設備|機台|焊接|返修|bga|solder|quote|quotation|inquiry|purchase|price|lead time/i.test(subject+" "+body);
-  return labelCount>=4 || (labelCount>=1 && commercial && isSalesRecipient(addr((m.toRecipients||[]).find(Boolean))));
+  return (subjectIsInquiry && labelCount>=4) ||
+    (labelCount>=1 && commercial && (m.toRecipients||[]).some(r=>isSalesRecipient(addr(r))));
 }
-
 function isWebsiteFormText(text){
   const t=htmlToText(text)
     .replace(/\*\*/g,"")
@@ -321,17 +315,31 @@ function includeMail(m){
   const toSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
   const subject=safeText(m.subject);
   const body=htmlToText(m.body?.content || m.bodyPreview || "");
+  const lowerBody=body.toLowerCase();
 
-  // 第一種：真正的網站通知信直接寄給 sales。
+  // A direct website form mail addressed to the source sales mailbox.
   const directFirst = toSales && !!from && !isInternalSender(from) &&
-    !isFollowupSubject(subject) && isWebInquiryRecord(m);
+    !isFollowupSubject(subject) && /聯絡我們/i.test(subject) && isWebInquiryRecord(m);
 
-  // 第二種：sales 收到的「原始網站通知」之後被業務轉寄到統計信箱。
-  // 只有內文仍保留原始 From/To + 網站表單的第一封案件才納入。
-  const original = extractOriginalCustomerMessage(body);
-  const originalFrom = /(?:^|\n)\s*(?:From|寄件人)\s*[:：]?[\s\S]{0,220}?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(original);
-  const originalTo = /(?:^|\n)\s*(?:To|收件人|收件者)\s*[:：]?[\s\S]{0,120}sales@cbtrade\.com\.tw/i.test(original);
-  const forwardedFirst = originalFrom && originalTo && isWebInquiryText(original) && !isFollowupSubject(subject);
+  // Forwarded forms vary across Outlook, iOS and nested forwards. Validate the
+  // original To and Subject headers anywhere in the quoted body instead of
+  // assuming one exact "Begin forwarded message" layout.
+  const hasSalesToHeader = body.split(/\r?\n/).some(line =>
+    /^(?:>+\s*)?(?:to|收件人|收件者)\s*[:：]/i.test(line) &&
+    line.toLowerCase().includes("sales@cbtrade.com.tw")
+  );
+  const hasInquirySubjectHeader = body.split(/\r?\n/).some(line =>
+    /^(?:>+\s*)?(?:subject|主旨|標題)\s*[:：]/i.test(line) &&
+    /聯絡我們/i.test(line)
+  );
+  const hasExternalFromHeader = body.split(/\r?\n/).some(line =>
+    /^(?:>+\s*)?(?:from|寄件人|寄件者)\s*[:：]/i.test(line) &&
+    /@[a-z0-9.-]+\.[a-z]{2,}/i.test(line) &&
+    !/@(?:cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)\b/i.test(line)
+  );
+  const forwardedFirst = !/^\s*(?:re|回覆)\s*[:：-]/i.test(subject) &&
+    hasSalesToHeader && hasInquirySubjectHeader && hasExternalFromHeader &&
+    isWebInquiryText(body);
 
   return directFirst || forwardedFirst;
 }
