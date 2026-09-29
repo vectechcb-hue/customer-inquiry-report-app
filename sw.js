@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v59";
+const CACHE_VERSION = "v60;
 const CACHE_NAME = "vectech-customer-inquiry-" + CACHE_VERSION;
 const APP_SHELL = [
   "./",
