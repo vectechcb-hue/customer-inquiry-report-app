@@ -75,10 +75,44 @@ assert(all.length === 3 && diag.pages === 2 && diag.total === 3 && diag.complete
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v59"), "index.html UI 版本不是 v59");
-assert(index.includes("cache-build" content="v59"), "index.html cache-build 不是 v59");
-assert(index.includes("app.js?v=20260929v59"), "index.html app.js cache query 不是 v59");
-assert(index.includes("sw.js?v=20260929v59"), "Service Worker 註冊版本不是 v59");
-assert(sw.includes('const CACHE_VERSION = "v59";'), "Service Worker cache version 不是 v59");
+assert(index.includes("APP v60"), "index.html UI 版本不是 v60");
+assert(index.includes("cache-build" content="v60"), "index.html cache-build 不是 v60");
+assert(index.includes("app.js?v=20260929v60"), "index.html app.js cache query 不是 v60");
+assert(index.includes("sw.js?v=20260929v60"), "Service Worker 註冊版本不是 v60");
+assert(sw.includes('const CACHE_VERSION = "v60";'), "Service Worker cache version 不是 v60");
+
+
+
+// Noise / unrelated-message regressions:
+const unrelated = {
+  ...fixture,
+  subject: "Re: 內部測試報表",
+  from: { emailAddress: { name: "同事", address: "staff@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "同事", address: "staff@cbtrade.com.tw" } },
+  toRecipients: [{ emailAddress: { address: "sales@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "今日內部測試報表已完成。" }
+};
+assert(d.includeMail(unrelated) === false, "內部無關郵件被納入");
+
+const salesNoIntent = {
+  ...fixture,
+  subject: "會議通知",
+  body: { contentType: "text", content: "明天下午三點會議，請查收。" }
+};
+assert(d.includeMail(salesNoIntent) === false, "sales 收件但無客戶詢問意圖的郵件被納入");
+
+const salesCustomer = {
+  ...fixture,
+  subject: "詢價：RV-371 測試需求",
+  body: { contentType: "text", content: "您好，我們想詢價 RV-371，請提供規格與交期。\nEmail: henry_wang@quantatw.com\n電話: (+886) 3-3272345 ext.64381" }
+};
+assert(d.includeMail(salesCustomer) === true, "正常 sales 客戶詢問被誤排除");
+
+const newsletter = {
+  ...fixture,
+  subject: "產品電子報／最新消息",
+  body: { contentType: "text", content: "newsletter marketing unsubscribe" }
+};
+assert(d.includeMail(newsletter) === false, "電子報未被排除");
 
 console.log("OUTLOOK_REGRESSION_PASS");
