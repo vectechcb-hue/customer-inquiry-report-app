@@ -331,7 +331,7 @@ function includeMail(m){
   const original = extractOriginalCustomerMessage(body);
   const originalFrom = /(?:^|\n)\s*(?:From|寄件人)\s*[:：]?[\s\S]{0,220}?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(original);
   const originalTo = /(?:^|\n)\s*(?:To|收件人|收件者)\s*[:：]?[\s\S]{0,120}sales@cbtrade\.com\.tw/i.test(original);
-  const forwardedFirst = originalFrom && originalTo && isWebInquiryText(original) && !isFollowupSubject(subject);
+  const forwardedFirst = originalFrom && originalTo && isWebInquiryText(original);
 
   return directFirst || forwardedFirst;
 }
