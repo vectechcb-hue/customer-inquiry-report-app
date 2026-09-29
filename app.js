@@ -11,8 +11,8 @@ const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
-const APP_VERSION="v59";
-const CACHE_VERSION="v59";
+const APP_VERSION="v60";
+const CACHE_VERSION="v60";
 const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
@@ -428,16 +428,43 @@ function hasOriginalSalesHeader(text){
   }
   return false;
 }
+function hasCustomerEvidence(m,c){
+  const body=htmlToText(m.body?.content||m.bodyPreview||"");
+  const subject=safeText(m.subject);
+  const externalFrom=!!(addr(m.from)||addr(m.sender))&&!isInternalSender(addr(m.from)||addr(m.sender));
+  const externalEmail=!!c.email&&!/@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(c.email);
+  const identity=!!(c.company||c.name||c.phone||c.email||c.address);
+  const inquiryWords=/(詢問|請問|詢價|報價|價格|採購|購買|訂購|規格|需求|評估|推薦|產品|設備|機台|焊接|返修|交期|quote|quotation|inquiry|purchase|order|price|specification|lead\s*time)/i;
+  const productOrIntent=inquiryWords.test(subject+"\n"+body);
+  const contactEvidence=/[@]|(?:09\d{2}|0\d{1,2}[-\s]?\d{6,8})/.test(body)||identity;
+  return (externalFrom||externalEmail) && identity && productOrIntent && contactEvidence;
+}
+
 function includeMail(m){
   const subject=safeText(m.subject);
-  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject))return false;
+  // 只有「網路來源」且具有實際客戶詢問證據才進入統計。
+  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject)) return false;
+
   const bodyParts=[m.body?.content,m.bodyPreview].filter(Boolean).map(part=>htmlToText(part));
-  const toSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)))||bodyParts.some(part=>hasOriginalSalesHeader(part));
-  const subjectIsInquiry=/聯絡我們/i.test(cleanSubject(subject))||bodyParts.some(part=>{
-    const originalSubject=firstLabeled(part,["原始主旨","Subject","主旨","標題"]);
-    return /聯絡我們/i.test(originalSubject);
-  });
-  return toSales||subjectIsInquiry;
+  const body=bodyParts.join("\n");
+  const c=parseCustomer(body,subject,m);
+
+  const sourceSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r))) ||
+    bodyParts.some(part=>hasOriginalSalesHeader(part));
+  const sourceContactUs=/聯絡我們/i.test(cleanSubject(subject)) ||
+    bodyParts.some(part=>{
+      const originalSubject=firstLabeled(part,["原始主旨","Subject","主旨","標題"]);
+      return /聯絡我們/i.test(originalSubject);
+    });
+
+  const noise=noiseMail(m);
+  if(noise) return false;
+
+  // 來源條件 AND 客戶證據：
+  // A. 收件至 sales@cbtrade.com.tw；或 B. 主旨為「聯絡我們」
+  // 再加上外部客戶身分／聯絡資料＋實際產品／採購／詢問意圖。
+  const sourceMatched=sourceSales||sourceContactUs;
+  return sourceMatched && hasCustomerEvidence(m,c);
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -707,7 +734,7 @@ async function runScan(){
     const {start,end}=getTaipeiMonthRangeFromYM(ym);
     const ymText=formatYM(ym);
 
-    updateStatus("已登入 Outlook，將依原始收件地址、聯絡我們主旨與網站表單欄位篩選；排除 RE 回覆及內部郵件…");
+    updateStatus("已登入 Outlook，將先判定網路來源，再以外部客戶身分、聯絡資料與產品／採購詢問意圖進行二次篩選；排除 RE、促銷、廣告及內部郵件…");
 
     const select="id,internetMessageId,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
     // Read every Inbox page first, then apply the selected month locally. This
@@ -1256,6 +1283,8 @@ window.runOutlookScan=runScan;
 window.__mailDiagnostics={
   appVersion:APP_VERSION,
   cacheVersion:CACHE_VERSION,
+  hasCustomerEvidence,
+
   includeMail,
   noiseMail,
   parseCustomer,
