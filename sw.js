@@ -5,7 +5,7 @@ const APP_SHELL = [
   "./index.html",
   "./login.html",
   "./manifest.webmanifest",
-  "./app.js?v=20260929v59"
+  "./app.js?v=20260929v60"
 ];
 
 self.addEventListener("install", function(event){
