@@ -249,6 +249,14 @@ function extractSalesperson(raw, mailMeta = {}){
   }
   return "";
 }
+function isWebInquiryText(text){
+  const t = htmlToText(text).replace(/\\*\\*/g,"").replace(/^>+/gm,"").replace(/\\r/g,"");
+  const labels = [
+    /公司名稱\\s*[:：]?/i,/姓名\\s*[:：]?/i,/地址\\s*[:：]?/i,
+    /聯絡電話\\s*[:：]?/i,/Email\\s*[:：]?/i,/Website\\s*[:：]?/i,/詢問內容\\s*[:：]?/i
+  ];
+  return labels.filter(re=>re.test(t)).length >= 4;
+}
 function isSalesRecipient(address){
   return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
 }
@@ -323,7 +331,7 @@ function includeMail(m){
   const original = extractOriginalCustomerMessage(body);
   const originalFrom = /(?:^|\n)\s*(?:From|寄件人)\s*[:：]?[\s\S]{0,220}?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(original);
   const originalTo = /(?:^|\n)\s*(?:To|收件人|收件者)\s*[:：]?[\s\S]{0,120}sales@cbtrade\.com\.tw/i.test(original);
-  const forwardedFirst = originalFrom && originalTo && hasWebInquiryForm(original) && !isFollowupSubject(subject);
+  const forwardedFirst = originalFrom && originalTo && isWebInquiryText(original) && !isFollowupSubject(subject);
 
   return directFirst || forwardedFirst;
 }
