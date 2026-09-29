@@ -315,7 +315,6 @@ function includeMail(m){
   const toSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
   const subject=safeText(m.subject);
   const body=htmlToText(m.body?.content || m.bodyPreview || "");
-  const lowerBody=body.toLowerCase();
 
   // A direct website form mail addressed to the source sales mailbox.
   const directFirst = toSales && !!from && !isInternalSender(from) &&
@@ -324,16 +323,19 @@ function includeMail(m){
   // Forwarded forms vary across Outlook, iOS and nested forwards. Validate the
   // original To and Subject headers anywhere in the quoted body instead of
   // assuming one exact "Begin forwarded message" layout.
-  const hasSalesToHeader = body.split(/\r?\n/).some(line =>
-    /^(?:>+\s*)?(?:to|收件人|收件者)\s*[:：]/i.test(line) &&
+  const headerLines = body.split(/\r?\n/).map(line =>
+    line.replace(/^\s*>+\s*/, "").replace(/\*\*/g, "").trim()
+  );
+  const hasSalesToHeader = headerLines.some(line =>
+    /^(?:to|收件人|收件者)\s*[:：]/i.test(line) &&
     line.toLowerCase().includes("sales@cbtrade.com.tw")
   );
-  const hasInquirySubjectHeader = body.split(/\r?\n/).some(line =>
-    /^(?:>+\s*)?(?:subject|主旨|標題)\s*[:：]/i.test(line) &&
+  const hasInquirySubjectHeader = headerLines.some(line =>
+    /^(?:subject|主旨|標題)\s*[:：]/i.test(line) &&
     /聯絡我們/i.test(line)
   );
-  const hasExternalFromHeader = body.split(/\r?\n/).some(line =>
-    /^(?:>+\s*)?(?:from|寄件人|寄件者)\s*[:：]/i.test(line) &&
+  const hasExternalFromHeader = headerLines.some(line =>
+    /^(?:from|寄件人|寄件者)\s*[:：]/i.test(line) &&
     /@[a-z0-9.-]+\.[a-z]{2,}/i.test(line) &&
     !/@(?:cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)\b/i.test(line)
   );
