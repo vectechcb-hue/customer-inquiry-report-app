@@ -431,19 +431,21 @@ function hasOriginalSalesHeader(text){
 function hasCustomerEvidence(m,c){
   const body=htmlToText(m.body?.content||m.bodyPreview||"");
   const subject=safeText(m.subject);
-  const externalFrom=!!(addr(m.from)||addr(m.sender))&&!isInternalSender(addr(m.from)||addr(m.sender));
+  const from=addr(m.from)||addr(m.sender);
+  const externalFrom=!!from&&!isInternalSender(from);
   const externalEmail=!!c.email&&!/@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(c.email);
   const identity=!!(c.company||c.name||c.phone||c.email||c.address);
-  const inquiryWords=/(詢問|請問|詢價|報價|價格|採購|購買|訂購|規格|需求|評估|推薦|產品|設備|機台|焊接|返修|交期|quote|quotation|inquiry|purchase|order|price|specification|lead\s*time)/i;
-  const productOrIntent=inquiryWords.test(subject+"\n"+body);
-  const contactEvidence=/[@]|(?:09\d{2}|0\d{1,2}[-\s]?\d{6,8})/.test(body)||identity;
-  return (externalFrom||externalEmail) && identity && productOrIntent && contactEvidence;
+  const inquiry=/(詢價|報價|詢問|請問|想了解|需要|需求|評估|推薦|規格|價格|費用|採購|購買|訂購|下單|交期|交貨|產品|型號|設備|機台|焊接|返修|離子風槍| quote |quotation|inquiry|purchase|order|price|specification|lead\s*time)/i.test(subject+"\n"+body);
+  const explicitContact=/(Email|E-mail|聯絡人|聯絡姓名|姓名|電話|手機|TEL|Phone|地址|公司名稱|Website|網址)\s*[:：]/i.test(body);
+  const signatureContact=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(body) ||
+    /(?:\(\s*\+886\s*\)|\+886|09\d{2}|0\d{1,2}[-\s]?\d{6,8})/i.test(body);
+  // 外部客戶 + 身分 + 真實詢問意圖；至少要有一項客戶聯絡/公司證據。
+  return (externalFrom||externalEmail) && identity && inquiry && (explicitContact||signatureContact||!!c.email||!!c.phone||!!c.company);
 }
 
 function includeMail(m){
   const subject=safeText(m.subject);
-  // 只有「網路來源」且具有實際客戶詢問證據才進入統計。
-  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject)) return false;
+  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject))return false;
 
   const bodyParts=[m.body?.content,m.bodyPreview].filter(Boolean).map(part=>htmlToText(part));
   const body=bodyParts.join("\n");
@@ -457,14 +459,8 @@ function includeMail(m){
       return /聯絡我們/i.test(originalSubject);
     });
 
-  const noise=noiseMail(m);
-  if(noise) return false;
-
-  // 來源條件 AND 客戶證據：
-  // A. 收件至 sales@cbtrade.com.tw；或 B. 主旨為「聯絡我們」
-  // 再加上外部客戶身分／聯絡資料＋實際產品／採購／詢問意圖。
-  const sourceMatched=sourceSales||sourceContactUs;
-  return sourceMatched && hasCustomerEvidence(m,c);
+  if(noiseMail(m))return false;
+  return (sourceSales||sourceContactUs) && hasCustomerEvidence(m,c);
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
