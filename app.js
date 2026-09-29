@@ -20,29 +20,48 @@ function safeText(v){ return String(v ?? "").trim(); }
 function htmlToText(v){
   const s = String(v ?? "");
   if (!s) return "";
-  // Outlook forwards may arrive as text even when Graph labels the body as HTML.
-  // Preserve literal <email@domain> values before DOMParser can treat them as tags.
+  // Graph can return plain text bodies; parsing them as HTML collapses every line.
   const protectedText = s.replace(/<([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>/ig, "&lt;$1&gt;");
-  try {
-    const d = new DOMParser().parseFromString(protectedText, "text/html");
-    return (d.body?.innerText || d.body?.textContent || protectedText)
-      .replace(/\r/g, "")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim();
-  } catch (_) {
+  const looksLikeHtml = /<\s*\/?\s*(?:html|head|body|div|p|br|table|thead|tbody|tfoot|tr|td|th|ul|ol|li|blockquote|h[1-6]|span|a|img|font|b|strong|i|em|style|script)\b[^>]*>/i.test(protectedText);
+  if (!looksLikeHtml) {
     return protectedText
-      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/ig, " ")
-      .replace(/<br\s*\/?>/ig, "\n")
-      .replace(/<\/(?:p|div|tr|li|table|blockquote|h[1-6])\s*>/ig, "\n")
-      .replace(/<\/t[dh]\s*>/ig, " | ")
-      .replace(/<[^>]*>/g, " ")
-      .replace(/&nbsp;|&#160;/ig, " ")
+      .replace(/&nbsp;|&#160;|&#xA0;/ig, " ")
       .replace(/&amp;/ig, "&")
       .replace(/&lt;/ig, "<")
       .replace(/&gt;/ig, ">")
       .replace(/&quot;/ig, '"')
       .replace(/&#39;|&apos;/ig, "'")
+      .replace(/\r/g, "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+  // Keep table-cell and block boundaries even when innerText would join cells.
+  const marked = protectedText
+    .replace(/<br\b[^>]*\/?>/ig, "\uE001")
+    .replace(/<\/t[dh]\s*>/ig, "\uE000")
+    .replace(/<\/(?:p|div|tr|li|table|blockquote|h[1-6])\s*>/ig, "\uE001");
+  try {
+    const d = new DOMParser().parseFromString(marked, "text/html");
+    return (d.body?.innerText || d.body?.textContent || marked)
+      .replace(/\uE000/g, " | ")
+      .replace(/\uE001/g, "\n")
+      .replace(/\r/g, "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  } catch (_) {
+    return marked
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/ig, " ")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;|&#160;|&#xA0;/ig, " ")
+      .replace(/&amp;/ig, "&")
+      .replace(/&lt;/ig, "<")
+      .replace(/&gt;/ig, ">")
+      .replace(/&quot;/ig, '"')
+      .replace(/&#39;|&apos;/ig, "'")
+      .replace(/\uE000/g, " | ")
+      .replace(/\uE001/g, "\n")
       .replace(/\r/g, "")
       .replace(/[ \t]+\n/g, "\n")
       .replace(/\n{3,}/g, "\n\n")
@@ -119,25 +138,54 @@ function field(text, regexes){
   return "";
 }
 function firstLabeled(text, labels){
-  const lines = htmlToText(text).replace(/\u00a0/g, " ").replace(/\*\*/g, "").split(/\r?\n/);
+  const normalized = htmlToText(text)
+    .replace(/\u00a0/g, " ")
+    .replace(/\*\*/g, "")
+    .replace(/^\s*>+\s*/gm, " ");
+  const fields = [
+    "公司名稱","公司名","公司","公司地址","公司電話","聯絡姓名","聯絡人","姓名","窗口",
+    "地址","聯絡電話","電話","手機","Mobile","Phone","TEL","FAX","E-mail","Email",
+    "Website","網站","詢問內容","問題","需求","留言","Message","Inquiry",
+    "原始主旨","Subject","主旨","標題","From","寄件人","寄件者","To","收件人","收件者",
+    "Sent","日期","Date","Cc","副本"
+  ];
+  const escapeRe = value => String(value).replace(/[|\\{}()[\]^$+*?.-]/g, "\\$&");
+  const fieldPattern = fields.sort((a,b) => b.length-a.length).map(escapeRe).join("|");
+  const segments = normalized.split(/[\r\n|｜\t]+/).map(s => s.trim()).filter(Boolean);
+  const clean = value => {
+    let v = String(value || "");
+    const nextField = new RegExp("\\s+(?:" + fieldPattern + ")\\s*[:：]", "i").exec(v);
+    if (nextField) v = v.slice(0, nextField.index);
+    return v
+      .replace(/^\s*[|｜>:_：\s]+/g, "")
+      .replace(/(?:^|\s)>+\s*(?:[-_]{2,}\s*)*$/g, "")
+      .replace(/[_\s]+$/g, "")
+      .trim();
+  };
   for (const label of labels) {
-    const re = new RegExp("^\\s*[|｜\\s]*" + label + "\\s*[:：]?\\s*(?:[|｜]\\s*)?(.*?)\\s*[|｜\\s]*$", "i");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].replace(/^\s*>+\s*/, "").trim();
-      const match = line.match(re);
+    const escaped = escapeRe(label);
+    const atSegmentStart = new RegExp("^\\s*" + escaped + "\\s*[:：]?\\s*(.*)$", "i");
+    for (let i=0;i<segments.length;i++) {
+      const match = segments[i].match(atSegmentStart);
       if (!match) continue;
-      let value = safeText(match[1]).replace(/^[|｜\s]+|[|｜\s]+$/g, "").trim();
-      value = value.replace(/^\[([^\]]+)\]\(mailto:[^)]+\)$/i, "$1")
-        .replace(/^\[([^\]]+)\]\([^)]+\)$/, "$1");
-      if (value) return value;
-      for (let j = i + 1; j < Math.min(lines.length, i + 5); j++) {
-        const next = lines[j].replace(/^\s*>+\s*/, "").trim().replace(/^[|｜\s]+|[|｜\s]+$/g, "").trim();
-        if (!next || /^[-|｜:\s]+$/.test(next)) continue;
-        if (/^(?:公司名稱|公司名|姓名|聯絡人|地址|公司地址|聯絡電話|電話|Email|E-mail|Website|網站|詢問內容|From|To|Subject|寄件人|收件人|主旨)\s*[:：]?/i.test(next)) break;
-        const cleaned = next.replace(/^\[([^\]]+)\]\(mailto:[^)]+\)$/i, "$1")
-          .replace(/^\[([^\]]+)\]\([^)]+\)$/, "$1");
-        if (cleaned) return cleaned;
+      let value = clean(match[1]);
+      if (!value) {
+        for (let j=i+1;j<segments.length;j++) {
+          if (!segments[j]) continue;
+          if (new RegExp("^(?:" + fieldPattern + ")\\s*[:：]", "i").test(segments[j])) break;
+          value = clean(segments[j]);
+          break;
+        }
       }
+      if (value && !/^[-—]+$/.test(value)) return value;
+    }
+    // Some Graph HTML bodies arrive as one rendered line. Still stop at the next
+    // recognized field label, but preserve the source line breaks above.
+    const inline = new RegExp("(?:^|[\\s|｜\\t])" + escaped + "\\s*[:：]\\s*", "ig");
+    let hit;
+    while ((hit=inline.exec(normalized))) {
+      const value = clean(normalized.slice(hit.index + hit[0].length));
+      if (value && !/^[-—]+$/.test(value)) return value;
     }
   }
   return "";
@@ -184,27 +232,7 @@ function extractContactName(text,mailMeta={}){
   return "";
 }
 function extractQuestionText(text){
-  const normalized = htmlToText(text).replace(/\u00a0/g, " ").replace(/\*\*/g, "");
-  const lines = normalized.split(/\r?\n/);
-  const questionLabel = /(?:詢問內容|問題|需求|留言|Message|Inquiry)/i;
-  const otherField = /^(?:Website|網站|公司名稱|公司名|公司電話|聯絡電話|電話|Email|E-mail|姓名|聯絡人|地址|TEL|FAX)\s*[:：]?/i;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].replace(/^\s*>+\s*/, "").trim();
-    const match = line.match(new RegExp("^\\s*[|｜\\s]*" + questionLabel.source + "\\s*[:：]?\\s*(?:[|｜]\\s*)?(.*)$", "i"));
-    if (!match) continue;
-    const parts = [];
-    const first = safeText(match[1]).replace(/^[|｜\s]+|[|｜\s]+$/g, "").trim();
-    if (first) parts.push(first);
-    for (let j = i + 1; j < lines.length; j++) {
-      const next = lines[j].replace(/^\s*>+\s*/, "").replace(/\*\*/g, "").trim().replace(/^[|｜\s]+|[|｜\s]+$/g, "").trim();
-      if (!next || /^[-|｜:\s]+$/.test(next)) continue;
-      if (otherField.test(next) || /^(?:From|To|Subject|Sent|寄件者|收件者|主旨|日期)\s*[:：]/i.test(next)) break;
-      if (/^(?:開始轉寄郵件|Original Message)/i.test(next)) break;
-      parts.push(next);
-    }
-    return parts.join("\n").trim();
-  }
-  return "";
+  return firstLabeled(text, ["詢問內容","問題","需求","留言","Message","Inquiry"]);
 }
 function parseCustomer(raw,subject,mailMeta={}){
   const t=htmlToText(raw);
@@ -407,6 +435,7 @@ function makeRow(c,meta={}){
     來源平台: meta.platform || "Outlook",
     LINE用戶ID: meta.lineUserId || "",
     公司名稱: c.company || "",
+    公司地址: c.address || "",
     聯絡人: c.name || "",
     Email: c.email || "",
     電話: c.phone || "",
@@ -519,9 +548,18 @@ function render(){
     list.innerHTML = '<div style="padding:25px;text-align:center;color:#94a3b8">目前沒有資料</div>';
     return;
   }
-  list.innerHTML = rows.map(r =>
-    '<div class="item"><b>'+esc(r.公司名稱||"未辨識公司")+'　'+esc(r.聯絡人||"")+'</b><div class="meta">'+esc(r.日期)+'　'+esc(r.Email||r.電話||"")+'　'+esc(r.業務人員||"未指定")+'</div><div class="q">'+esc(r.詢問內容||"")+'</div></div>'
-  ).join("");
+  list.innerHTML = rows.map(r => {
+    const company = safeText(r.公司名稱) || "未辨識公司";
+    const contact = safeText(r.聯絡人) || "聯絡人未提供";
+    const meta = [
+      r.日期,
+      r.Email && "Email: " + r.Email,
+      r.電話 && "電話: " + r.電話,
+      r.公司地址 && "地址: " + r.公司地址,
+      r.業務人員 && "業務: " + r.業務人員
+    ].filter(Boolean).map(esc).join("　");
+    return '<div class="item"><b>' + esc(company) + '　' + esc(contact) + '</b><div class="meta">' + meta + '</div><div class="q">' + esc(r.詢問內容 || "") + '</div></div>';
+  }).join("");
 }
 
 async function initAuth(){
@@ -661,12 +699,18 @@ async function runScan(){
 
     const outlookRows=dedupe(scanned);
     const duplicateMails=Math.max(0,scanned.length-outlookRows.length);
-    const contactEmailCount=new Set(scanned.map(r=>safeText(r.Email).toLowerCase()).filter(Boolean)).size;
+    const fieldQuality={
+      company:outlookRows.filter(r=>safeText(r.公司名稱)).length,
+      contact:outlookRows.filter(r=>safeText(r.聯絡人)).length,
+      email:outlookRows.filter(r=>safeText(r.Email)).length,
+      phone:outlookRows.filter(r=>safeText(r.電話)).length,
+      address:outlookRows.filter(r=>safeText(r.公司地址)).length
+    };
     state.rows=dedupe([...outlookRows,...lineRows]);
     render();
 
     const lineMsg=getLineApiUrl() ? "；LINE "+lineRows.length+" 筆" : "；LINE 尚未設定";
-    updateStatus("完成："+ymText+"：Outlook 去重後網路詢問 "+outlookRows.length+" 筆（符合條件郵件 "+scanned.length+" 封，重複 "+duplicateMails+" 封已合併）；掃描收件匣 "+allInbox.length+" 封，本月 "+a.length+" 封；聯絡 Email "+contactEmailCount+" 個；總計 "+state.rows.length+" 筆"+lineMsg);
+    updateStatus("完成："+ymText+"：Outlook 去重後網路詢問 "+outlookRows.length+" 筆（符合條件郵件 "+scanned.length+" 封，重複 "+duplicateMails+" 封已合併）；欄位完整度：公司 "+fieldQuality.company+"/"+outlookRows.length+"、聯絡人 "+fieldQuality.contact+"/"+outlookRows.length+"、Email "+fieldQuality.email+"/"+outlookRows.length+"、電話 "+fieldQuality.phone+"/"+outlookRows.length+"、地址 "+fieldQuality.address+"/"+outlookRows.length+"；掃描收件匣 "+allInbox.length+" 封，本月 "+a.length+" 封；總計 "+state.rows.length+" 筆"+lineMsg);
   }catch(e){
     console.error(e);
     const msg=e?.message || String(e);
@@ -997,15 +1041,15 @@ function addManual(){
 }
 
 function xlsxSheet(rows){
-  const headers = ["日期","公司名稱","聯絡人","公司電話","詢問內容","業務人員","是否成交","成交金額"];
-  const data = [headers, ...rows.map(r => [r.日期 || "", r.公司名稱 || "", r.聯絡人 || "", r.電話 || "", r.詢問內容 || "", r.業務人員 || "", r.是否成交 || "", r.成交金額 || ""])];
+  const headers = ["日期","公司名稱","聯絡人","Email","電話","公司地址","原始主旨","詢問內容","業務人員","是否成交","成交金額"];
+  const data = [headers, ...rows.map(r => [r.日期 || "", r.公司名稱 || "", r.聯絡人 || "", r.Email || "", r.電話 || "", r.公司地址 || "", r.原始主旨 || "", r.詢問內容 || "", r.業務人員 || "", r.是否成交 || "", r.成交金額 || ""])];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{wch:12},{wch:24},{wch:18},{wch:22},{wch:72},{wch:14},{wch:12},{wch:14}];
+  ws["!cols"] = [{wch:12},{wch:26},{wch:18},{wch:30},{wch:20},{wch:40},{wch:38},{wch:64},{wch:16},{wch:12},{wch:14}];
   ws["!rows"] = [{hpt:24}, ...rows.map(r => ({ hpt: Math.min(210, Math.max(60, 42 + Math.ceil((r.詢問內容 || "").length / 55) * 18)) }))];
-  ws["!autofilter"] = { ref: "A1:H" + data.length };
+  ws["!autofilter"] = { ref: "A1:K" + data.length };
   const headerStyle = { font:{name:"Microsoft JhengHei",bold:true,color:{rgb:"FFFFFF"}}, fill:{fgColor:{rgb:"4472C4"}}, alignment:{horizontal:"center",vertical:"center",wrap_text:true}, border:{top:{style:"thin",color:{rgb:"B7C9D6"}},bottom:{style:"thin",color:{rgb:"B7C9D6"}},left:{style:"thin",color:{rgb:"B7C9D6"}},right:{style:"thin",color:{rgb:"B7C9D6"}}} };
-  for (let c=0;c<8;c++) ws[XLSX.utils.encode_cell({r:0,c})].s = headerStyle;
-  for (let r=1;r<data.length;r++) for (let c=0;c<8;c++) {
+  for (let c=0;c<headers.length;c++) ws[XLSX.utils.encode_cell({r:0,c})].s = headerStyle;
+  for (let r=1;r<data.length;r++) for (let c=0;c<headers.length;c++) {
     const cell = ws[XLSX.utils.encode_cell({r,c})];
     if (!cell) continue;
     cell.s = {font:{name:"Microsoft JhengHei"},alignment:{vertical:"top",wrap_text:true},border:{top:{style:"thin",color:{rgb:"D5DDE3"}},bottom:{style:"thin",color:{rgb:"D5DDE3"}},left:{style:"thin",color:{rgb:"D5DDE3"}},right:{style:"thin",color:{rgb:"D5DDE3"}}}};
