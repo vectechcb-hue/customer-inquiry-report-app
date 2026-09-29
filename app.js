@@ -595,22 +595,27 @@ async function runScan(){
 
     updateStatus("已登入 Outlook，嚴格只抓第一封「客戶→sales@cbtrade.com.tw」網站詢問，後續 RE/FW 全部排除…");
 
-    const from=encodeURIComponent(start.toISOString());
-    const to=encodeURIComponent(end.toISOString());
     const select="id,internetMessageId,subject,from,sender,toRecipients,ccRecipients,receivedDateTime,sentDateTime,body,bodyPreview,webLink";
-
-    const inbox=GRAPH+"/me/mailFolders/" + MAIL_FOLDER_ID + "/messages?$filter=receivedDateTime%20ge%20"+from+"%20and%20receivedDateTime%20lt%20"+to+"&$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
+    // Read every Inbox page first, then apply the selected month locally. This
+    // avoids Graph date-filter inconsistencies while preserving full pagination.
+    const inbox=GRAPH+"/me/mailFolders/" + MAIL_FOLDER_ID + "/messages?$top=100&$select="+select+"&$orderby=receivedDateTime%20desc";
 
     const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
 
-    updateStatus("正在讀取 Outlook；第一封客戶網站詢問才納入，後續業務往來全部排除…");
-    const [a,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
+    updateStatus("正在讀取 Outlook 收件匣所有郵件頁次…");
+    const [allInbox,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
+    if(!allInbox.length) throw new Error("Microsoft Graph 沒有回傳任何收件匣郵件。請確認已登入 cbtrade0411@outlook.com 並授權讀取郵件。");
 
-    updateStatus("正在分析 sales@cbtrade.com.tw 第一封網站客戶通知；後續 RE/FW 與業務往來全部排除…");
-    const scanned=[...a]
-      .filter(includeMail)
-      .filter(m=>!noiseMail(m))
-      .filter(m=>!!m.id)
+    const a=allInbox.filter(m=>{
+      const received=Date.parse(m.receivedDateTime || m.sentDateTime || "");
+      return Number.isFinite(received) && received>=start.getTime() && received<end.getTime();
+    });
+    if(!a.length) throw new Error("Graph 已讀取收件匣 "+allInbox.length+" 封，但選定月份沒有郵件。請確認郵件日期與統計月份。");
+
+    updateStatus("已讀取收件匣 "+allInbox.length+" 封；正在篩選 "+ymText+" 郵件…");
+    const routed=a.filter(includeMail);
+    const candidates=routed.filter(m=>!noiseMail(m)&&!!m.id);
+    const scanned=candidates
       .map(m=>{
         const raw=m.body?.content || m.bodyPreview || "";
         const c=parseCustomer(raw,m.subject,m);
@@ -623,7 +628,7 @@ async function runScan(){
     render();
 
     const lineMsg=getLineApiUrl() ? "；LINE "+lineRows.length+" 筆" : "；LINE 尚未設定";
-    updateStatus("完成："+ymText+" 共整理 "+state.rows.length+" 筆網路客戶詢問"+lineMsg);
+    updateStatus("完成："+ymText+"；Outlook 收件匣 "+allInbox.length+" 封，本月 "+a.length+" 封，符合網站詢問 "+routed.length+" 封，整理 "+scanned.length+" 筆；總計 "+state.rows.length+" 筆"+lineMsg);
   }catch(e){
     console.error(e);
     const msg=e?.message || String(e);
