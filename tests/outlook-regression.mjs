@@ -115,4 +115,42 @@ const newsletter = {
 };
 assert(d.includeMail(newsletter) === false, "電子報未被排除");
 
+
+// 精準篩選：內部寄件者即使寄到 sales 也不能進統計。
+const internalNotice = {
+  ...fixture,
+  subject: "內部出貨通知：RV-371",
+  from: { emailAddress: { name: "內部同事", address: "staff@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "內部同事", address: "staff@cbtrade.com.tw" } },
+  body: { contentType: "text", content: "請確認樣品已出貨。" }
+};
+assert(d.includeMail(internalNotice) === false, "內部出貨通知被誤計");
+
+// 無關外部信即使寄到 sales，也要有產品／採購／詢問意圖。
+const externalGreeting = {
+  ...fixture,
+  subject: "您好",
+  body: { contentType: "text", content: "您好，祝工作順利。" }
+};
+assert(d.includeMail(externalGreeting) === false, "外部一般寒暄被誤計");
+
+// 正常客戶詢問仍需保留。
+const normalInquiry = {
+  ...fixture,
+  subject: "詢價：RV-371 報價與交期",
+  body: { contentType: "text", content: "您好，我們想詢價 RV-371，請提供報價與交期。\nEmail: henry_wang@quantatw.com\n電話: (+886) 3-3272345 ext.64381" }
+};
+assert(d.includeMail(normalInquiry) === true, "正常客戶詢價被排除");
+
+// 聯絡我們主旨不能單獨成為統計資料，仍要有客戶證據。
+const weakContactUs = {
+  ...fixture,
+  subject: "聯絡我們",
+  from: { emailAddress: { name: "網站系統", address: "noreply@example.com" } },
+  sender: { emailAddress: { name: "網站系統", address: "noreply@example.com" } },
+  toRecipients: [{ emailAddress: { address: "other@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "聯絡我們表單" }
+};
+assert(d.includeMail(weakContactUs) === false, "只有聯絡我們字樣的郵件被誤計");
+
 console.log("OUTLOOK_REGRESSION_PASS");
