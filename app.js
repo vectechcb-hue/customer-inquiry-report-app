@@ -10,7 +10,10 @@ const MAIL_FOLDER_ID = "inbox";
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
-const AUTO_SCAN_KEY = "vectech_auto_scan_after_login_v1";
+const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
+const APP_VERSION="v59";
+const CACHE_VERSION="v59";
+const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
 let authReadyPromise = null;
@@ -115,12 +118,7 @@ function saveLineApiUrl(){
 }
 function saveManual(){ localStorage.setItem(MANUAL_KEY, JSON.stringify(state.manualRows)); }
 function accountEmails(account){
-  return [
-    account?.username,
-    account?.idTokenClaims?.preferred_username,
-    account?.idTokenClaims?.email,
-    account?.idTokenClaims?.upn
-  ].map(v=>safeText(v).toLowerCase()).filter(Boolean);
+  return [account?.username,account?.idTokenClaims?.preferred_username,account?.idTokenClaims?.email,account?.idTokenClaims?.upn,account?.mail,account?.userPrincipalName].map(v=>safeText(v).toLowerCase()).filter(Boolean);
 }
 function isTargetAccount(account){
   return accountEmails(account).includes(TARGET_MAILBOX);
@@ -191,10 +189,22 @@ function firstLabeled(text, labels){
   return "";
 }
 function extractEmails(text){
-  return [...new Set((htmlToText(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[])
-    .map(x=>x.replace(/[>，,。；;]+$/,"").trim().toLowerCase()))];
+  return [...new Set((htmlToText(text).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig)||[]).map(x=>x.replace(/[>，,。；;]+$/,"").trim().toLowerCase()))];
 }
 function extractPhones(text){
+  const t=htmlToText(text);
+  const out=[];
+  const intl=/(?:\(\s*\+886\s*\)|\+886)\s*(?:0?)(\d{1,2})[-\s]?(\d{6,8})(?:\s*(?:ext|x|#)\s*\.?\s*(\d{1,6}))?/ig;
+  let m;
+  while((m=intl.exec(t))){
+    const local="0"+m[1]+"-"+m[2];
+    out.push(m[3]?local+" ext."+m[3]:local);
+  }
+  const local=t.match(/(?:09\d{2}[-\s]?\d{3}[-\s]?\d{3}|0\d{1,2}[-\s]?\d{6,8})(?:\s*(?:ext|x|#)\s*\.?\s*\d{1,6})?/ig)||[];
+  out.push(...local);
+  return [...new Set(out.map(x=>x.replace(/[，,；;。]+$/,"").replace(/\s+/g," ").trim()).filter(x=>x.length>=8))];
+}
+function looksLikeCompany(text){
   const hits=htmlToText(text).match(/(?:0\d{1,2}[-\s]?\d{6,8}(?:#\d{1,5})?|09\d{2}[-\s]?\d{3}[-\s]?\d{3})/g)||[];
   return [...new Set(hits.map(x=>x.replace(/[，,；;。]+$/,"").trim()).filter(x=>x.length>=8))];
 }
@@ -213,8 +223,20 @@ function extractCompany(text){
   const labeled=firstLabeled(text,["公司名稱","公司名","公司"]);
   if(labeled) return cleanCompanyCandidate(labeled);
   const lines=htmlToText(text).split("\n").map(x=>x.trim()).filter(Boolean);
-  const candidates=lines.filter(x=>x.length>=3&&x.length<=60&&looksLikeCompany(x)&&!/@/.test(x)&&! /^(?:TEL|FAX|電話|傳真|手機|地址|Email|E-mail|Website|網站|詢問內容|留言)/i.test(x));
-  return candidates[0]||"";
+
+  for(const line of lines){
+    const m=line.match(/^(?:我是|我為|來自|這邊是)\s*([\u4e00-\u9fffA-Za-z0-9&._\- ]{2,40}?)(?:\s*BU\s*\d+\b|\s*[-–—]\s*[A-Za-z]{2,20}\b|\s*,|\s*，)/i);
+    if(m?.[1]){
+      const candidate=cleanCompanyCandidate(m[1]);
+      if(candidate&&!/^Henry|Wang$/i.test(candidate)) return candidate;
+    }
+  }
+
+  const candidates=lines.filter(x=>x.length>=3&&x.length<=60&&looksLikeCompany(x)&&!/@/.test(x)&&!/^(?:TEL|FAX|電話|傳真|手機|地址|Email|E-mail|Website|網站|詢問內容|留言)/i.test(x));
+  if(candidates[0]) return cleanCompanyCandidate(candidates[0]);
+
+  const englishCompany=lines.find(x=>/\b(?:Inc\.?|Ltd\.?|Corp\.?|Corporation|Co\.?\s*,?\s*Ltd\.?)\b/i.test(x)&&!/@/.test(x));
+  return englishCompany?englishCompany.replace(/^\s*[-•]\s*/,"").trim():"";
 }
 function extractContactName(text,mailMeta={}){
   const labeled=firstLabeled(text,["姓名","聯絡人","聯絡姓名","窗口"]);
@@ -231,20 +253,38 @@ function extractContactName(text,mailMeta={}){
   if(metaName&&!/承邦|VECTECH|威鐵克/i.test(metaName)) return metaName;
   return "";
 }
-function extractQuestionText(text){
-  return firstLabeled(text, ["詢問內容","問題","需求","留言","Message","Inquiry"]);
+function extractQuestionText(text){return firstLabeled(text,["詢問內容","問題","需求","留言","Message","Inquiry"]);}
+function extractBodyQuestion(text){
+  const lines=htmlToText(text).split("\n").map(x=>x.trim()).filter(Boolean);
+  if(!lines.length)return "";
+  let start=0;
+  const subjectIdx=lines.findIndex(x=>/^(?:Subject|主旨|標題)\s*[:：]/i.test(x));
+  if(subjectIdx>=0)start=subjectIdx+1;
+  const skip=/^(?:From|寄件者|寄件人|Sent|寄送|To|收件者|收件人|Cc|副本|Subject|主旨|標題|Date|日期)\s*[:：]/i;
+  const stop=/^(?:Best\s+Regards|Kind\s+Regards|Regards|BR\s*[,：:]?|Sincerely|此致|敬上|Call\s*[:：]?|TEL\s*[:：]?|電話\s*[:：]?)/i;
+  const kept=[];
+  for(let i=start;i<lines.length;i++){
+    const line=lines[i];
+    if(skip.test(line))continue;
+    if(stop.test(line))break;
+    if(/^(?:您好|你好)[，,！!。.]?$/.test(line))continue;
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
 }
 function parseCustomer(raw,subject,mailMeta={}){
   const t=htmlToText(raw);
   const company=extractCompany(t);
   const name=extractContactName(t,mailMeta);
   const emails=extractEmails(t);
+  const metaEmail=addr(mailMeta?.from)||addr(mailMeta?.sender);
+  if(metaEmail&&!emails.includes(metaEmail)) emails.unshift(metaEmail);
   const phones=extractPhones(t);
   const phone=firstLabeled(t,["公司電話","聯絡電話","電話","TEL","Phone","手機","Mobile"])||phones[0]||"";
   const emailField=firstLabeled(t,["Email","E-mail"]);
   const email=(emailField.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)||[])[0]||emails[0]||"";
   const address=firstLabeled(t,["公司地址","地址","Address"])||"";
-  const question=extractQuestionText(t);
+  const question=extractQuestionText(t)||extractBodyQuestion(t);
   const originalSubject=firstLabeled(t,["原始主旨","Subject"])||cleanSubject(subject);
   return {
     company:cleanCompanyCandidate(company),
@@ -326,7 +366,8 @@ function isWebInquiryText(text){
   return labels.filter(label => t.includes(label.toLowerCase())).length >= 4;
 }
 function isSalesRecipient(address){
-  return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
+  const a=safeText(address).toLowerCase().replace(/^mailto:/i,"").replace(/[<>"]/g,"").trim();
+  return a==="sales@cbtrade.com.tw";
 }
 function extractOriginalCustomerMessage(body){
   const t=htmlToText(body);
@@ -364,9 +405,6 @@ function isWebsiteFormText(text){
   ];
   return labels.filter(re=>re.test(t)).length >= 4;
 }
-function isSalesRecipient(address){
-  return safeText(address).toLowerCase() === "sales@cbtrade.com.tw";
-}
 function isInternalSender(address){
   const a=safeText(address).toLowerCase();
   return !a || /@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(a);
@@ -391,22 +429,15 @@ function hasOriginalSalesHeader(text){
   return false;
 }
 function includeMail(m){
-  const subject = safeText(m.subject);
-  // A reply may quote the original form and must not become another inquiry.
-  if (/^\s*(?:re|回覆)\s*[:：-]/i.test(subject)) return false;
-
-  const bodyParts = [m.body?.content, m.bodyPreview]
-    .filter(Boolean)
-    .map(part => htmlToText(part));
-  const body = bodyParts.join("\n");
-  const toSales = (m.toRecipients || []).some(r => isSalesRecipient(addr(r))) ||
-    bodyParts.some(part => hasOriginalSalesHeader(part));
-  const subjectIsInquiry = /聯絡我們/i.test(subject) ||
-    bodyParts.some(part => /(?:subject|主旨|標題)\s*[:：]?\s*[^\r\n]{0,240}聯絡我們/i.test(part));
-
-  // Match the original source recipient, inquiry subject, and form fields.
-  // Do not depend on how Outlook nests the quoted From/To/Subject headers.
-  return toSales && subjectIsInquiry && isWebInquiryText(body);
+  const subject=safeText(m.subject);
+  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject))return false;
+  const bodyParts=[m.body?.content,m.bodyPreview].filter(Boolean).map(part=>htmlToText(part));
+  const toSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)))||bodyParts.some(part=>hasOriginalSalesHeader(part));
+  const subjectIsInquiry=/聯絡我們/i.test(cleanSubject(subject))||bodyParts.some(part=>{
+    const originalSubject=firstLabeled(part,["原始主旨","Subject","主旨","標題"]);
+    return /聯絡我們/i.test(originalSubject);
+  });
+  return toSales||subjectIsInquiry;
 }
 function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
@@ -419,7 +450,7 @@ function isInternalOnly(m,c){
 function heuristicInquiry(m,c){
   const s = (safeText(m.subject) + "\n" + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
   let score = 0;
-  for (const k of ["聯絡我們","詢價","報價","價格","採購","購買","詢問","請問","規格","交期","產品","設備","機台","焊接","返修","bga","solder","quote","quotation","inquiry","purchase","price","lead time"]) if (s.includes(k.toLowerCase())) score += 2;
+  for (const k of ["聯絡我們","詢價","報價","價格","採購","購買","詢問","請問","規格","交期","產品","設備","機台","焊接","返修","評估","推薦","離子風槍","吹力","需求","bga","solder","quote","quotation","inquiry","purchase","price","lead time"]) if (s.includes(k.toLowerCase())) score += 2;
   for (const k of ["簽核","內部","工作報告","日報","週報","月報","出貨通知","維修完成","測試報告","退訂","newsletter","promotion","促銷","廣告","marketing"]) if (s.includes(k.toLowerCase())) score -= 3;
   const externalEmail = c.email && !/@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(c.email);
   const externalFrom = (addr(m.from)||addr(m.sender)) && !/@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(addr(m.from)||addr(m.sender));
@@ -518,8 +549,19 @@ function getStatDate(){
   return new Date();
 }
 function getStatYM(){
-  const d = getStatDate();
-  return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0");
+  const d=getStatDate();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+}
+function getTaipeiMonthRangeFromYM(ym){
+  const m=String(ym||"").match(/^(\d{4})-(\d{1,2})$/);
+  const year=m?Number(m[1]):new Date().getFullYear();
+  const month=m?Number(m[2]):new Date().getMonth()+1;
+  const start=new Date(Date.UTC(year,month-1,1)-TAIPEI_OFFSET_MS);
+  const end=new Date(Date.UTC(year,month,1)-TAIPEI_OFFSET_MS);
+  return {start,end};
+}
+function getTaipeiMonthRange(){
+  return getTaipeiMonthRangeFromYM(getStatYM());
 }
 function formatYM(ym){
   const [y,m] = ym.split("-");
@@ -661,10 +703,9 @@ async function runScan(){
       return;
     }
 
-    const stat=getStatDate();
-    const start=new Date(stat.getFullYear(),stat.getMonth(),1);
-    const end=new Date(stat.getFullYear(),stat.getMonth()+1,1);
-    const ymText=formatYM(getStatYM());
+    const ym=getStatYM();
+    const {start,end}=getTaipeiMonthRangeFromYM(ym);
+    const ymText=formatYM(ym);
 
     updateStatus("已登入 Outlook，將依原始收件地址、聯絡我們主旨與網站表單欄位篩選；排除 RE 回覆及內部郵件…");
 
@@ -676,7 +717,8 @@ async function runScan(){
     const linePromise=fetchLineRows(start,end).catch(e=>{console.warn("LINE讀取失敗",e);return [];});
 
     updateStatus("正在讀取 Outlook 收件匣所有郵件頁次…");
-    const [allInbox,lineRows]=await Promise.all([graphAll(inbox,tok),linePromise]);
+    const graphDiagnostics={};
+    const [allInbox,lineRows]=await Promise.all([graphAll(inbox,tok,graphDiagnostics),linePromise]);
     if(!allInbox.length) throw new Error("Microsoft Graph 沒有回傳任何收件匣郵件。請確認已登入 cbtrade0411@outlook.com 並授權讀取郵件。");
 
     const a=allInbox.filter(m=>{
@@ -685,7 +727,7 @@ async function runScan(){
     });
     if(!a.length) throw new Error("Graph 已讀取收件匣 "+allInbox.length+" 封，但選定月份沒有郵件。請確認郵件日期與統計月份。");
 
-    updateStatus("已讀取收件匣 "+allInbox.length+" 封；正在篩選 "+ymText+" 郵件…");
+    updateStatus("已讀取收件匣 "+allInbox.length+" 封（Graph 分頁 "+graphDiagnostics.pages+" 頁）；正在篩選 "+ymText+" 郵件…");
     const routed=a.filter(includeMail);
     const candidates=routed.filter(m=>!noiseMail(m)&&!!m.id);
     const scanned=candidates
@@ -698,6 +740,21 @@ async function runScan(){
       .filter(Boolean);
 
     const outlookRows=dedupe(scanned);
+    window.lastOutlookDiagnostics={
+      appVersion:APP_VERSION,
+      cacheVersion:CACHE_VERSION,
+      account:safeText(account.username),
+      graphPages:graphDiagnostics.pages||0,
+      graphTotal:graphDiagnostics.total||allInbox.length,
+      month:ym,
+      monthStartUtc:start.toISOString(),
+      monthEndUtcExclusive:end.toISOString(),
+      inboxMonthMessages:a.length,
+      matchedSourceRule:routed.length,
+      afterNoiseFilter:candidates.length,
+      scannedRows:scanned.length,
+      outputRows:outlookRows.length
+    };
     const duplicateMails=Math.max(0,scanned.length-outlookRows.length);
     const fieldQuality={
       company:outlookRows.filter(r=>safeText(r.公司名稱)).length,
@@ -955,23 +1012,24 @@ function buildLineConversationCases(events){
   return dedupe(cases);
 }
 
-async function graphAll(url, tok){
-  const out = [];
-  let next = url;
-  while (next) {
-    const r = await fetch(next, { headers: { Authorization: "Bearer " + tok, Prefer: 'outlook.body-content-type="html"' } });
-    if (!r.ok) {
-      let detail = "";
-      try { const j = await r.json(); detail = j?.error?.message || ""; } catch (_) {}
-      throw new Error("Microsoft Graph " + r.status + (detail ? " — " + detail : ""));
+async function graphAll(url,tok,diagnostics={}){
+  const out=[]; let next=url;
+  diagnostics.pages=0; diagnostics.total=0; diagnostics.httpOk=true;
+  while(next){
+    diagnostics.pages++;
+    const r=await fetch(next,{headers:{Authorization:"Bearer "+tok,Prefer:'outlook.body-content-type="html"'}});
+    if(!r.ok){
+      diagnostics.httpOk=false; let detail="";
+      try{const j=await r.json();detail=j?.error?.message||"";}catch(_){}
+      throw new Error("Microsoft Graph "+r.status+(detail?" — "+detail:""));
     }
-    const j = await r.json();
-    out.push(...(j.value || []));
-    next = j["@odata.nextLink"] || "";
+    const j=await r.json();
+    const page=Array.isArray(j.value)?j.value:[];
+    out.push(...page); diagnostics.total=out.length; next=j["@odata.nextLink"]||"";
   }
+  diagnostics.completed=true;
   return out;
 }
-
 function openManual(){ byId("manualModal").classList.add("show"); byId("mDate").value = isoDate(new Date()); }
 function closeManual(){ byId("manualModal").classList.remove("show"); }
 async function ocrImages(files){
@@ -1193,6 +1251,20 @@ function setup(){
       const b = byId("connect"); if (b) b.style.pointerEvents = "auto";
     });
 }
-window.connectOutlook = loginAndConnect;
-window.runOutlookScan = runScan;
-window.addEventListener("DOMContentLoaded", setup);
+window.connectOutlook=loginAndConnect;
+window.runOutlookScan=runScan;
+window.__mailDiagnostics={
+  appVersion:APP_VERSION,
+  cacheVersion:CACHE_VERSION,
+  includeMail,
+  noiseMail,
+  parseCustomer,
+  mailToRow,
+  graphAll,
+  getTaipeiMonthRangeFromYM,
+  hasOriginalSalesHeader,
+  heuristicInquiry,
+  accountEmails,
+  isTargetAccount
+};
+window.addEventListener("DOMContentLoaded",setup);
