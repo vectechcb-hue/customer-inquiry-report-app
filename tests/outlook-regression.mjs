@@ -83,11 +83,11 @@ assert(all.length === 3 && diag.pages === 2 && diag.total === 3 && diag.complete
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v61"), "index.html UI 版本不是 v61");
-assert(index.includes('cache-build" content="v61"'), "index.html cache-build 不是 v61");
-assert(index.includes("app.js?v=20260930v61"), "index.html app.js cache query 不是 v61");
-assert(index.includes("sw.js?v=20260930v61"), "Service Worker 註冊版本不是 v61");
-assert(sw.includes('const CACHE_VERSION = "v61";'), "Service Worker cache version 不是 v61");
+assert(index.includes("APP v62"), "index.html UI 版本不是 v62");
+assert(index.includes('cache-build" content="v62"'), "index.html cache-build 不是 v62");
+assert(index.includes("app.js?v=20260930v62"), "index.html app.js cache query 不是 v62");
+assert(index.includes("sw.js?v=20260930v62"), "Service Worker 註冊版本不是 v62");
+assert(sw.includes('const CACHE_VERSION = "v62";'), "Service Worker cache version 不是 v62");
 
 
 
