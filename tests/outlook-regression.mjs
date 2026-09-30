@@ -76,9 +76,9 @@ assert(all.length === 3 && diag.pages === 2 && diag.total === 3 && diag.complete
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
 assert(index.includes("APP v60"), "index.html UI 版本不是 v60");
-assert(index.includes("cache-build" content="v60"), "index.html cache-build 不是 v60");
-assert(index.includes("app.js?v=20260929v60"), "index.html app.js cache query 不是 v60");
-assert(index.includes("sw.js?v=20260929v60"), "Service Worker 註冊版本不是 v60");
+assert(index.includes('cache-build" content="v60"'), "index.html cache-build 不是 v60");
+assert(index.includes("app.js?v=20260930v60"), "index.html app.js cache query 不是 v60");
+assert(index.includes("sw.js?v=20260930v60"), "Service Worker 註冊版本不是 v60");
 assert(sw.includes('const CACHE_VERSION = "v60";'), "Service Worker cache version 不是 v60");
 
 
