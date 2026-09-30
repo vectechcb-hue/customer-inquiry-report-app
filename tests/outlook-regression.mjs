@@ -55,7 +55,15 @@ const forwarded = {
   }
 };
 assert(d.includeMail(forwarded) === true, "FW 原始 To=sales 無法判定");
-assert(d.includeMail({ ...fixture, subject: "聯絡我們：詢問設備", toRecipients: [{ emailAddress: { address: "other@cbtrade.com.tw" } }] }) === true, "聯絡我們主旨無法判定");
+const websiteForm = {
+  ...fixture,
+  subject: "聯絡我們",
+  from: { emailAddress: { name: "Website", address: "noreply@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "Website", address: "noreply@cbtrade.com.tw" } },
+  toRecipients: [{ emailAddress: { address: "other@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "公司名稱：廣達電腦\n姓名：Henry Wang\n地址：桃園市\n聯絡電話：03-3272345\nEmail：henry_wang@quantatw.com\nWebsite：https://www.quantatw.com\n詢問內容：想了解離子風槍規格與報價" }
+};
+assert(d.includeMail(websiteForm) === true, "完整聯絡我們表單無法判定");
 assert(d.includeMail({ ...fixture, subject: "RE: [A9D]離子風槍組評估 - 承邦" }) === false, "RE 回覆未排除");
 assert(d.noiseMail({ ...fixture, subject: "促銷優惠", body: { content: "unsubscribe promotion newsletter" } }) === true, "促銷郵件未排除");
 
@@ -75,11 +83,11 @@ assert(all.length === 3 && diag.pages === 2 && diag.total === 3 && diag.complete
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v60"), "index.html UI 版本不是 v60");
-assert(index.includes('cache-build" content="v60"'), "index.html cache-build 不是 v60");
-assert(index.includes("app.js?v=20260930v60"), "index.html app.js cache query 不是 v60");
-assert(index.includes("sw.js?v=20260930v60"), "Service Worker 註冊版本不是 v60");
-assert(sw.includes('const CACHE_VERSION = "v60";'), "Service Worker cache version 不是 v60");
+assert(index.includes("APP v61"), "index.html UI 版本不是 v60");
+assert(index.includes('cache-build" content="v61"'), "index.html cache-build 不是 v60");
+assert(index.includes("app.js?v=20260930v61"), "index.html app.js cache query 不是 v60");
+assert(index.includes("sw.js?v=20260930v61"), "Service Worker 註冊版本不是 v60");
+assert(sw.includes('const CACHE_VERSION = "v61";'), "Service Worker cache version 不是 v60");
 
 
 
@@ -152,5 +160,47 @@ const weakContactUs = {
   body: { contentType: "text", content: "聯絡我們表單" }
 };
 assert(d.includeMail(weakContactUs) === false, "只有聯絡我們字樣的郵件被誤計");
+
+
+// 更嚴格的無關郵件回歸：外部供應商／合作夥伴即使寄到 sales，也不能只因產品字眼被算成客戶詢問。
+const vendorNotice = {
+  ...fixture,
+  subject: "RV-371 產品資料更新通知",
+  from: { emailAddress: { name: "Vendor", address: "vendor@example.com" } },
+  sender: { emailAddress: { name: "Vendor", address: "vendor@example.com" } },
+  toRecipients: [{ emailAddress: { address: "sales@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "您好，附件提供 RV-371 最新產品資料與型錄，供貴司參考。若有任何問題歡迎聯繫。Vendor Co., Ltd.\nEmail: vendor@example.com" }
+};
+assert(d.includeMail(vendorNotice) === false, "外部供應商產品資料通知被誤計");
+
+// 外部寄件者只有產品名稱、沒有實際詢問動作，不應納入。
+const productInfoOnly = {
+  ...fixture,
+  subject: "BGA3500DX 產品介紹",
+  from: { emailAddress: { name: "Partner", address: "partner@example.com" } },
+  sender: { emailAddress: { name: "Partner", address: "partner@example.com" } },
+  toRecipients: [{ emailAddress: { address: "sales@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "提供 BGA3500DX 設備介紹、規格與應用資訊。公司：Partner Technology Ltd.\nEmail: partner@example.com" }
+};
+assert(d.includeMail(productInfoOnly) === false, "純產品資訊被誤計");
+
+// 外部通知信含「需求／產品」字眼，但不是客戶請求。
+const supplierShipment = {
+  ...fixture,
+  subject: "需求單 RV-371 已出貨",
+  from: { emailAddress: { name: "Supplier", address: "supplier@example.com" } },
+  sender: { emailAddress: { name: "Supplier", address: "supplier@example.com" } },
+  toRecipients: [{ emailAddress: { address: "sales@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "您需求的 RV-371 已於今日出貨，物流單號 123456。Supplier Co., Ltd.\nEmail: supplier@example.com" }
+};
+assert(d.includeMail(supplierShipment) === false, "供應商出貨通知被誤計");
+
+// 沒有客戶聯絡證據的外部詢問也不應直接納入。
+const noContactInquiry = {
+  ...fixture,
+  subject: "詢價：RV-371",
+  body: { contentType: "text", content: "您好，我們想詢價 RV-371，請提供報價與交期。" }
+};
+assert(d.includeMail(noContactInquiry) === false, "缺少客戶聯絡資料仍被納入");
 
 console.log("OUTLOOK_REGRESSION_PASS");
