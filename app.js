@@ -432,8 +432,8 @@ function hasOriginalSalesHeader(text){
 function extractOriginalSenderEmail(text){
   const t=htmlToText(text);
   const patterns=[
-    /(?:^|\\n)\\s*(?:From|寄件者|寄件人)\\s*[:：]?[^\\n<]{0,160}<([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})>/im,
-    /(?:^|\\n)\\s*(?:From|寄件者|寄件人)\\s*[:：]?\\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})/im
+    /(?:^|\n)\s*(?:From|寄件者|寄件人)\s*[:：]?[^\n<]{0,160}<([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>/im,
+    /(?:^|\n)\s*(?:From|寄件者|寄件人)\s*[:：]?\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/im
   ];
   for(const re of patterns){
     const m=t.match(re);
@@ -442,7 +442,7 @@ function extractOriginalSenderEmail(text){
   return "";
 }
 function hasExplicitInquiryIntent(text){
-  const t=htmlToText(text).replace(/^[>\\s]+/gm," ");
+  const t=htmlToText(text).replace(/^[>\s]+/gm," ");
   // 產品／設備／規格本身不是詢問；必須出現實際詢問、索取、採購或請求動作。
   const directRequest=/(詢價|報價|價格|費用|quote|quotation|price|inquiry|purchase|order|訂購|下單)/i.test(t);
   const askRequest=/(請問|想了解|想詢問|煩請|請提供|請協助|麻煩|可否|是否(?:能|可以)|有沒有|希望|需要)/i.test(t);
@@ -472,21 +472,21 @@ function hasCustomerEvidence(m,c){
   const externalEmail=isExternalEmail(c.email);
   const identity=!!(c.company||c.name||c.phone||c.email||c.address);
   const contactEvidence=hasCustomerContactEvidence(c);
-  const intent=hasExplicitInquiryIntent(subject+"\\n"+body);
-  const operational=hasOperationalNoise(subject+"\\n"+body);
+  const intent=hasExplicitInquiryIntent(subject+"\n"+body);
+  const operational=hasOperationalNoise(subject+"\n"+body);
   if(operational || !identity || !contactEvidence || !intent) return false;
   return externalFrom || externalEmail || externalOriginal;
 }
 
 function includeMail(m){
   const subject=safeText(m.subject);
-  if(/^\\s*(?:re|回覆)\\s*[:：-]/i.test(subject))return false;
+  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject))return false;
 
   const bodyParts=[m.body?.content,m.bodyPreview].filter(Boolean).map(part=>htmlToText(part));
-  const body=bodyParts.join("\\n");
+  const body=bodyParts.join("\n");
   const c=parseCustomer(body,subject,m);
 
-  if(noiseMail(m) || hasOperationalNoise(subject+"\\n"+body)) return false;
+  if(noiseMail(m) || hasOperationalNoise(subject+"\n"+body)) return false;
 
   const directSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
   const originalSales=bodyParts.some(part=>hasOriginalSalesHeader(part));
@@ -503,7 +503,7 @@ function includeMail(m){
   const hasExternalCustomerEmail=isExternalEmail(c.email);
   const identity=!!(c.company||c.name||c.phone||c.email||c.address);
   const contactEvidence=hasCustomerContactEvidence(c);
-  const intent=hasExplicitInquiryIntent(subject+"\\n"+body);
+  const intent=hasExplicitInquiryIntent(subject+"\n"+body);
 
   // A. 網站「聯絡我們」：必須真的有表單欄位，不能只靠主旨四個字。
   if(sourceContactUs && isWebsiteFormText(body)){
