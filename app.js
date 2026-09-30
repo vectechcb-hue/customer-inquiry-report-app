@@ -278,7 +278,8 @@ function parseCustomer(raw,subject,mailMeta={}){
   const name=extractContactName(t,mailMeta);
   const emails=extractEmails(t);
   const metaEmail=addr(mailMeta?.from)||addr(mailMeta?.sender);
-  if(metaEmail&&!emails.includes(metaEmail)) emails.unshift(metaEmail);
+  // 轉寄郵件外層寄件者可能是內部同事（例如 Alan），優先保留內文原始客戶 Email，避免被誤判成內部信。
+  if(metaEmail&&!emails.includes(metaEmail)&&!isInternalSender(metaEmail)) emails.unshift(metaEmail);
   const phones=extractPhones(t);
   const phone=firstLabeled(t,["公司電話","聯絡電話","電話","TEL","Phone","手機","Mobile"])||phones[0]||"";
   const emailField=firstLabeled(t,["Email","E-mail"]);
