@@ -199,6 +199,8 @@ assert(d.includeMail(supplierShipment) === false, "供應商出貨通知被誤�
 const noContactInquiry = {
   ...fixture,
   subject: "詢價：RV-371",
+  from: { emailAddress: { name: "網站系統", address: "noreply@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "網站系統", address: "noreply@cbtrade.com.tw" } },
   body: { contentType: "text", content: "您好，我們想詢價 RV-371，請提供報價與交期。" }
 };
 assert(d.includeMail(noContactInquiry) === false, "缺少客戶聯絡資料仍被納入");
