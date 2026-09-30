@@ -443,11 +443,11 @@ function extractOriginalSenderEmail(text){
 }
 function hasExplicitInquiryIntent(text){
   const t=htmlToText(text).replace(/^[>\\s]+/gm," ");
-  // 「產品／設備／規格」本身不是詢問；必須出現實際詢問、索取、採購或請求動作。
+  // 產品／設備／規格本身不是詢問；必須出現實際詢問、索取、採購或請求動作。
   const directRequest=/(詢價|報價|價格|費用|quote|quotation|price|inquiry|purchase|order|訂購|下單)/i.test(t);
   const askRequest=/(請問|想了解|想詢問|煩請|請提供|請協助|麻煩|可否|是否(?:能|可以)|有沒有|希望|需要)/i.test(t);
   const askObject=/(規格|報價|價格|費用|交期|產品|設備|機台|型號|方案|資料|推薦|協助|購買|採購|訂購|下單)/i.test(t);
-  const recommendRequest=/(?:煩請|請|麻煩|希望|需要|想) {0,1}.{0,50}(?:推薦|評估)/i.test(t);
+  const recommendRequest=/(?:煩請|請|麻煩|希望|需要|想).{0,50}(?:推薦|評估)/i.test(t);
   const questionMark=/[?？]/.test(t);
   return directRequest || (askRequest && askObject) || (recommendRequest && askObject) || (questionMark && askObject);
 }
@@ -475,15 +475,7 @@ function hasCustomerEvidence(m,c){
   const intent=hasExplicitInquiryIntent(subject+"\\n"+body);
   const operational=hasOperationalNoise(subject+"\\n"+body);
   if(operational || !identity || !contactEvidence || !intent) return false;
-  // 只有外部客戶寄件者、或轉寄內文中的原始外部客戶，才算客戶來源。
   return externalFrom || externalEmail || externalOriginal;
-}
-
-function isWebsiteInquiryCandidate(m,c,body){
-  const subject=safeText(m.subject);
-  const sourceContactUs=/聯絡我們/i.test(cleanSubject(subject)) ||
-    firstLabeled(body,["原始主旨","Subject","主旨","標題"]).match(/聯絡我們/i);
-  return sourceContactUs && isWebsiteFormText(body) && hasCustomerEvidence(m,c);
 }
 
 function includeMail(m){
