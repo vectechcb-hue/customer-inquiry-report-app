@@ -461,7 +461,12 @@ function isExternalEmail(address){
   return !!a && !isInternalSender(a);
 }
 function hasCustomerContactEvidence(c){
-  return !!(c.email || c.phone || c.company || c.address);
+  // 必須有可回覆的外部聯絡方式：Email 或電話；公司/地址單獨存在不足以確認客戶。
+  const email = safeText(c.email).toLowerCase();
+  const phone = safeText(c.phone);
+  const externalEmail = !!email && isExternalEmail(email);
+  const usablePhone = phone.replace(/\\D/g, "").length >= 8;
+  return externalEmail || usablePhone;
 }
 function hasCustomerEvidence(m,c){
   const body=htmlToText(m.body?.content||m.bodyPreview||"");
