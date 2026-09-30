@@ -11,8 +11,8 @@ const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
-const APP_VERSION="v60";
-const CACHE_VERSION="v60";
+const APP_VERSION="v61";
+const CACHE_VERSION="v61";
 const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
@@ -429,41 +429,108 @@ function hasOriginalSalesHeader(text){
   }
   return false;
 }
+function extractOriginalSenderEmail(text){
+  const t=htmlToText(text);
+  const patterns=[
+    /(?:^|\\n)\\s*(?:From|寄件者|寄件人)\\s*[:：]?[^\\n<]{0,160}<([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})>/im,
+    /(?:^|\\n)\\s*(?:From|寄件者|寄件人)\\s*[:：]?\\s*([A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,})/im
+  ];
+  for(const re of patterns){
+    const m=t.match(re);
+    if(m?.[1]) return m[1].toLowerCase();
+  }
+  return "";
+}
+function hasExplicitInquiryIntent(text){
+  const t=htmlToText(text).replace(/^[>\\s]+/gm," ");
+  // 「產品／設備／規格」本身不是詢問；必須出現實際詢問、索取、採購或請求動作。
+  const directRequest=/(詢價|報價|價格|費用|quote|quotation|price|inquiry|purchase|order|訂購|下單)/i.test(t);
+  const askRequest=/(請問|想了解|想詢問|煩請|請提供|請協助|麻煩|可否|是否(?:能|可以)|有沒有|希望|需要)/i.test(t);
+  const askObject=/(規格|報價|價格|費用|交期|產品|設備|機台|型號|方案|資料|推薦|協助|購買|採購|訂購|下單)/i.test(t);
+  const recommendRequest=/(?:煩請|請|麻煩|希望|需要|想) {0,1}.{0,50}(?:推薦|評估)/i.test(t);
+  const questionMark=/[?？]/.test(t);
+  return directRequest || (askRequest && askObject) || (recommendRequest && askObject) || (questionMark && askObject);
+}
+function hasOperationalNoise(text){
+  const t=htmlToText(text).toLowerCase();
+  return /出貨通知|出貨完成|出貨單|送貨通知|物流通知|簽核|簽呈|核准|會議通知|會議邀請|內部測試|測試完成|測試報告|維修完成|維修通知|工作報告|日報|週報|月報|付款通知|對帳通知|發票通知|系統通知|自動通知|no-reply|noreply/i.test(t);
+}
+function isExternalEmail(address){
+  const a=safeText(address).toLowerCase();
+  return !!a && !isInternalSender(a);
+}
+function hasCustomerContactEvidence(c){
+  return !!(c.email || c.phone || c.company || c.address);
+}
 function hasCustomerEvidence(m,c){
   const body=htmlToText(m.body?.content||m.bodyPreview||"");
   const subject=safeText(m.subject);
-  const from=addr(m.from)||addr(m.sender);
-  const externalFrom=!!from&&!isInternalSender(from);
-  const externalEmail=!!c.email&&!/@(cbtrade\.com\.tw|msa\.hinet\.net|ms39\.hinet\.net)$/i.test(c.email);
+  const directFrom=addr(m.from)||addr(m.sender);
+  const originalFrom=extractOriginalSenderEmail(body);
+  const externalFrom=isExternalEmail(directFrom);
+  const externalOriginal=isExternalEmail(originalFrom);
+  const externalEmail=isExternalEmail(c.email);
   const identity=!!(c.company||c.name||c.phone||c.email||c.address);
-  const inquiry=/(詢價|報價|詢問|請問|想了解|需要|需求|評估|推薦|規格|價格|費用|採購|購買|訂購|下單|交期|交貨|產品|型號|設備|機台|焊接|返修|離子風槍| quote |quotation|inquiry|purchase|order|price|specification|lead\s*time)/i.test(subject+"\n"+body);
-  const explicitContact=/(Email|E-mail|聯絡人|聯絡姓名|姓名|電話|手機|TEL|Phone|地址|公司名稱|Website|網址)\s*[:：]/i.test(body);
-  const signatureContact=/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.test(body) ||
-    /(?:\(\s*\+886\s*\)|\+886|09\d{2}|0\d{1,2}[-\s]?\d{6,8})/i.test(body);
-  // 外部客戶 + 身分 + 真實詢問意圖；至少要有一項客戶聯絡/公司證據。
-  return (externalFrom||externalEmail) && identity && inquiry && (explicitContact||signatureContact||!!c.email||!!c.phone||!!c.company);
+  const contactEvidence=hasCustomerContactEvidence(c);
+  const intent=hasExplicitInquiryIntent(subject+"\\n"+body);
+  const operational=hasOperationalNoise(subject+"\\n"+body);
+  if(operational || !identity || !contactEvidence || !intent) return false;
+  // 只有外部客戶寄件者、或轉寄內文中的原始外部客戶，才算客戶來源。
+  return externalFrom || externalEmail || externalOriginal;
+}
+
+function isWebsiteInquiryCandidate(m,c,body){
+  const subject=safeText(m.subject);
+  const sourceContactUs=/聯絡我們/i.test(cleanSubject(subject)) ||
+    firstLabeled(body,["原始主旨","Subject","主旨","標題"]).match(/聯絡我們/i);
+  return sourceContactUs && isWebsiteFormText(body) && hasCustomerEvidence(m,c);
 }
 
 function includeMail(m){
   const subject=safeText(m.subject);
-  if(/^\s*(?:re|回覆)\s*[:：-]/i.test(subject))return false;
+  if(/^\\s*(?:re|回覆)\\s*[:：-]/i.test(subject))return false;
 
   const bodyParts=[m.body?.content,m.bodyPreview].filter(Boolean).map(part=>htmlToText(part));
-  const body=bodyParts.join("\n");
+  const body=bodyParts.join("\\n");
   const c=parseCustomer(body,subject,m);
 
-  const sourceSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r))) ||
-    bodyParts.some(part=>hasOriginalSalesHeader(part));
+  if(noiseMail(m) || hasOperationalNoise(subject+"\\n"+body)) return false;
+
+  const directSales=(m.toRecipients||[]).some(r=>isSalesRecipient(addr(r)));
+  const originalSales=bodyParts.some(part=>hasOriginalSalesHeader(part));
   const sourceContactUs=/聯絡我們/i.test(cleanSubject(subject)) ||
     bodyParts.some(part=>{
       const originalSubject=firstLabeled(part,["原始主旨","Subject","主旨","標題"]);
       return /聯絡我們/i.test(originalSubject);
     });
 
-  if(noiseMail(m))return false;
-  return (sourceSales||sourceContactUs) && hasCustomerEvidence(m,c);
-}
-function noiseMail(m){
+  const directFrom=addr(m.from)||addr(m.sender);
+  const originalFrom=extractOriginalSenderEmail(body);
+  const hasExternalDirect=isExternalEmail(directFrom);
+  const hasExternalOriginal=isExternalEmail(originalFrom);
+  const hasExternalCustomerEmail=isExternalEmail(c.email);
+  const identity=!!(c.company||c.name||c.phone||c.email||c.address);
+  const contactEvidence=hasCustomerContactEvidence(c);
+  const intent=hasExplicitInquiryIntent(subject+"\\n"+body);
+
+  // A. 網站「聯絡我們」：必須真的有表單欄位，不能只靠主旨四個字。
+  if(sourceContactUs && isWebsiteFormText(body)){
+    return identity && contactEvidence && intent &&
+      (hasExternalDirect || hasExternalCustomerEmail || hasExternalOriginal);
+  }
+
+  // B. 直接寄到 sales：寄件者本身必須是外部客戶，且有明確詢問／請求。
+  if(directSales){
+    return hasExternalDirect && identity && contactEvidence && intent;
+  }
+
+  // C. 轉寄：外層可以是 Alan 等內部同事，但內文必須還原「原始外部客戶 + 原始收件人 sales」。
+  if(originalSales){
+    return hasExternalOriginal && identity && contactEvidence && intent;
+  }
+
+  return false;
+}function noiseMail(m){
   const s = (safeText(m.subject) + " " + htmlToText(m.body?.content || m.bodyPreview || "")).toLowerCase();
   return /unsubscribe|退訂|newsletter|促銷|促销|廣告|广告|advertisement|marketing|mailer-daemon|delivery status notification/.test(s);
 }
