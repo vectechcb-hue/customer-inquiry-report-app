@@ -1,11 +1,11 @@
-const CACHE_VERSION = "v60";
+const CACHE_VERSION = "v61";
 const CACHE_NAME = "vectech-customer-inquiry-" + CACHE_VERSION;
 const APP_SHELL = [
   "./",
   "./index.html",
   "./login.html",
   "./manifest.webmanifest",
-  "./app.js?v=20260930v60"
+  "./app.js?v=20260930v61"
 ];
 
 self.addEventListener("install", function(event){
