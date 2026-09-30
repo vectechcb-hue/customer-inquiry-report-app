@@ -466,6 +466,7 @@ function hasCustomerContactEvidence(c){
   const phone = safeText(c.phone);
   const externalEmail = !!email && isExternalEmail(email);
   const usablePhone = phone.replace(/\\D/g, "").length >= 8;
+  // 公司／地址只有在明確詢問的網站表單中才可作為輔助證據；一般 sales／轉寄仍要求 Email 或電話。
   return externalEmail || usablePhone;
 }
 function hasCustomerEvidence(m,c){
