@@ -444,12 +444,13 @@ function extractOriginalSenderEmail(text){
 function hasExplicitInquiryIntent(text){
   const t=htmlToText(text).replace(/^[>\s]+/gm," ");
   // 產品／設備／規格本身不是詢問；必須出現實際詢問、索取、採購或請求動作。
-  const directRequest=/(詢價|報價|價格|費用|quote|quotation|price|inquiry|purchase|order|訂購|下單)/i.test(t);
+  const directRequest=/(詢價|報價|詢問|inquiry|quotation|purchase|order|採購|購買|訂購|下單)/i.test(t);
   const askRequest=/(請問|想了解|想詢問|煩請|請提供|請協助|麻煩|可否|是否(?:能|可以)|有沒有|希望|需要)/i.test(t);
   const askObject=/(規格|報價|價格|費用|交期|產品|設備|機台|型號|方案|資料|推薦|協助|購買|採購|訂購|下單)/i.test(t);
+  const priceQuestion=/(?:價格|費用).{0,30}[?？]|[?？].{0,30}(?:價格|費用)/i.test(t);
   const recommendRequest=/(?:煩請|請|麻煩|希望|需要|想).{0,50}(?:推薦|評估)/i.test(t);
   const questionMark=/[?？]/.test(t);
-  return directRequest || (askRequest && askObject) || (recommendRequest && askObject) || (questionMark && askObject);
+  return directRequest || (askRequest && askObject) || (recommendRequest && askObject) || priceQuestion || (questionMark && askObject);
 }
 function hasOperationalNoise(text){
   const t=htmlToText(text).toLowerCase();
