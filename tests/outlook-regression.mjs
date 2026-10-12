@@ -2,9 +2,10 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const source = fs.readFileSync("app.js", "utf8");
+const monthInput = { value: "2026-09" };
 const sandbox = {
   window: { addEventListener() {}, location: { origin: "https://example.test", pathname: "/" } },
-  document: { getElementById() { return null; } },
+  document: { getElementById(id) { return id === "statDate" ? monthInput : null; } },
   localStorage: { getItem() { return null; }, setItem() {} },
   console: { log() {}, warn() {}, error() {}, table() {} },
   alert() {},
@@ -41,6 +42,15 @@ assert(row.日期 === "2026-09-29", "日期解析錯誤");
 assert(row.詢問內容.includes("推薦離子風槍組"), "詢問內容未解析");
 assert(d.getTaipeiMonthRangeFromYM("2026-09").start.toISOString() === "2026-08-31T16:00:00.000Z", "UTC+8 起始邊界錯誤");
 assert(d.getTaipeiMonthRangeFromYM("2026-09").end.toISOString() === "2026-09-30T16:00:00.000Z", "UTC+8 結束邊界錯誤");
+assert(d.getStatYM() === "2026-09", "月份選擇器解析錯誤");
+assert(d.getTaipeiCurrentYM(new Date("2026-09-30T15:59:59Z")) === "2026-09", "台灣月份切換前時間錯誤");
+assert(d.getTaipeiCurrentYM(new Date("2026-09-30T16:00:00Z")) === "2026-10", "台灣月份切換邊界錯誤");
+assert(d.isoDate("2026-09-30T16:00:00Z") === "2026-10-01", "郵件台灣日期顯示錯誤");
+const septemberRange = d.getTaipeiMonthRangeFromYM("2026-09");
+assert(Date.parse("2026-08-31T15:59:59.999Z") < septemberRange.start.getTime(), "月初前郵件應排除");
+assert(Date.parse("2026-08-31T16:00:00.000Z") === septemberRange.start.getTime(), "月初郵件應納入");
+assert(Date.parse("2026-09-30T15:59:59.999Z") < septemberRange.end.getTime(), "月底最後一刻應納入");
+assert(Date.parse("2026-09-30T16:00:00.000Z") === septemberRange.end.getTime(), "下月第一刻應排除");
 assert(d.isTargetAccount({ mail: "cbtrade0411@outlook.com" }) === true, "指定 Outlook 帳號辨識失敗");
 
 const forwarded = {
@@ -55,6 +65,27 @@ const forwarded = {
   }
 };
 assert(d.includeMail(forwarded) === true, "FW 原始 To=sales 無法判定");
+const markdownForwarded = {
+  ...forwarded,
+  subject: "FW: [A9D]離子風槍組評估 - 承邦",
+  body: {
+    contentType: "text",
+    content: "**From:** Henry Wang (王雲鴻) <Henry_Wang@quantatw.com>  \n**Sent:** Tuesday, September 29, 2026 9:20 AM  \n**To:** sales@cbtrade.com.tw  \n**Subject:** [A9D]離子風槍組評估 \\- 承邦\n\n您好,\n\n我是廣達電腦BU8 Henry,\n煩請協助推薦離子風槍組,\n出貨至台灣廣達QC3,\n待吹物是體積僅有15cm^3, 吹力不需要太大。謝謝!\n\nBest Regards,\nHenry Wang\nBU8, Quanta Computer Inc.\nCall : (+886) 3-3272345 ext.64381"
+  }
+};
+assert(d.includeMail(markdownForwarded) === true, "截圖格式轉寄詢問未納入");
+const markdownRow = d.mailToRow(markdownForwarded);
+assert(markdownRow.公司名稱 === "廣達電腦", "轉寄郵件公司解析錯誤");
+assert(markdownRow.聯絡人 === "Henry Wang (王雲鴻)", "轉寄郵件聯絡人解析錯誤");
+assert(markdownRow.Email === "henry_wang@quantatw.com", "轉寄郵件 Email 解析錯誤");
+assert(markdownRow.電話 === "03-3272345 ext.64381", "轉寄郵件電話解析錯誤");
+assert(markdownRow.原始主旨 === "[A9D]離子風槍組評估 - 承邦", "Markdown 主旨跳脫字元未清理");
+assert(markdownRow.詢問內容.includes("推薦離子風槍組") && !markdownRow.詢問內容.includes("From:"), "轉寄詢問內容仍混入信件標頭");
+const lessComplete = { ...markdownRow, 聯絡人: "", 詢問內容: "詢價離子風槍組" };
+const mergedRows = d.dedupe([lessComplete, markdownRow]);
+assert(mergedRows.length === 1 && mergedRows[0].聯絡人 === "Henry Wang (王雲鴻)", "重複詢問未保留較完整資料");
+const unrelatedOriginalHeader = "From: customer@example.com\\nSubject: Old inquiry\\n\\nOld content\\n\\nFrom: staff@cbtrade.com.tw\\nTo: sales@cbtrade.com.tw\\nSubject: Internal report";
+assert(d.hasOriginalSalesHeader(unrelatedOriginalHeader) === false, "錯誤跨郵件配對的原始 To=sales 被納入");
 const websiteForm = {
   ...fixture,
   subject: "聯絡我們",
@@ -64,6 +95,11 @@ const websiteForm = {
   body: { contentType: "text", content: "公司名稱：廣達電腦\n姓名：Henry Wang\n地址：桃園市\n聯絡電話：03-3272345\nEmail：henry_wang@quantatw.com\nWebsite：https://www.quantatw.com\n詢問內容：想了解離子風槍規格與報價" }
 };
 assert(d.includeMail(websiteForm) === true, "完整聯絡我們表單無法判定");
+const emptyWebsiteForm = {
+  ...websiteForm,
+  body: { contentType: "text", content: "公司名稱: 廣達電腦\\n姓名: Henry Wang\\n聯絡電話: 03-3272345\\nEmail: henry_wang@quantatw.com\\n詢問內容: ____|" }
+};
+assert(d.includeMail(emptyWebsiteForm) === false, "只有聯絡表單欄位但沒有詢問內容仍被納入");
 assert(d.includeMail({ ...fixture, subject: "RE: [A9D]離子風槍組評估 - 承邦" }) === false, "RE 回覆未排除");
 assert(d.noiseMail({ ...fixture, subject: "促銷優惠", body: { content: "unsubscribe promotion newsletter" } }) === true, "促銷郵件未排除");
 
@@ -73,21 +109,27 @@ sandbox.fetch = async () => ({
   async json() {
     calls++;
     return calls === 1
-      ? { value: [{ id: "a" }, { id: "b" }], "@odata.nextLink": "https://graph.test/page2" }
-      : { value: [{ id: "c" }] };
+      ? { value: Array.from({ length: 100 }, (_, i) => ({ id: "p1-" + i })), "@odata.nextLink": "https://graph.test/page2" }
+      : calls === 2
+        ? { value: Array.from({ length: 100 }, (_, i) => ({ id: "p2-" + i })), "@odata.nextLink": "https://graph.test/page3" }
+        : { value: Array.from({ length: 41 }, (_, i) => ({ id: "p3-" + i })) };
   }
 });
 const diag = {};
 const all = await d.graphAll("https://graph.test/page1", "token", diag);
-assert(all.length === 3 && diag.pages === 2 && diag.total === 3 && diag.completed === true, "Graph @odata.nextLink 分頁失敗");
+assert(all.length === 241 && diag.pages === 3 && diag.total === 241 && diag.completed === true, "Graph 100/100/41 三頁收件匣未完整讀取");
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v62"), "index.html UI 版本不是 v62");
-assert(index.includes('cache-build" content="v62"'), "index.html cache-build 不是 v62");
-assert(index.includes("app.js?v=20260930v62"), "index.html app.js cache query 不是 v62");
-assert(index.includes("sw.js?v=20260930v62"), "Service Worker 註冊版本不是 v62");
-assert(sw.includes('const CACHE_VERSION = "v62";'), "Service Worker cache version 不是 v62");
+assert(index.includes("APP v63"), "index.html UI 版本不是 v63");
+assert(index.includes('id="statDate" type="month"'), "統計日期欄位尚未改成月份選擇器");
+assert(index.includes('app-build" content="2026-10-12-v63"'), "頁面 build 版本未更新");
+assert(index.includes("app.js?v=20261012v63"), "index.html app.js 快取參數不同步");
+assert(index.includes('cache-build" content="v63"'), "index.html cache-build 不是 v63");
+assert(index.includes("app.js?v=20261012v63"), "index.html app.js cache query 不是 v63");
+assert(index.includes("sw.js?v=20261012v63"), "Service Worker 註冊版本不是 v63");
+assert(sw.includes('const CACHE_VERSION = "v63";'), "Service Worker cache version 不是 v63");
+assert(sw.includes("./app.js?v=20261012v63"), "Service Worker shell app.js 快取參數不同步");
 
 
 
