@@ -85,6 +85,46 @@ const lessComplete = { ...markdownRow, 聯絡人: "", 詢問內容: "詢價離�
 const mergedRows = d.dedupe([lessComplete, markdownRow]);
 assert(mergedRows.length === 1 && mergedRows[0].聯絡人 === "Henry Wang (王雲鴻)", "重複詢問未保留較完整資料");
 
+
+const englishRfq = {
+  ...fixture,
+  id: "english-rfq-usi",
+  subject: "FW: Request for Quotation - Vectech CB-998D Hot Air Station - USI Vietnam",
+  from: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  toRecipients: [{ emailAddress: { address: "staff@cbtrade.com.tw" } }],
+  receivedDateTime: "2026-10-07T07:24:26Z",
+  body: { contentType: "text", content:
+    "From: Giang Pham <phammgiang198@gmail.com>\n" +
+    "Sent: Wednesday, October 7, 2026 3:24 PM\n" +
+    "To: sales@cbtrade.com.tw\n" +
+    "Subject: Request for Quotation - Vectech CB-998D Hot Air Station - USI Vietnam\n\n" +
+    "Dear Sales Team,\n" +
+    "My name is Giang, representing UNIVERSAL SCIENTIFIC INDUSTRIAL (USI) Company based in Vietnam.\n" +
+    "We are interested in purchasing your product and would like to request an official Commercial Quotation for the following item:\n" +
+    "Product Name: Vectech Digital SMD Hot Air Station\nModel: CB-998D\nQuantity: 1 unit\n" +
+    "Power Requirement: AC 220V - 50Hz/60Hz (Strictly required for Vietnam power grid)\n" +
+    "Could you please provide us with:\n" +
+    "The Unit Price and Total Price (FOB or CIF Hochiminh/Haiphong port, Vietnam).\n" +
+    "Estimated lead time and delivery time to Vietnam.\n" +
+    "Availability of Product Warranty and Certificate of Origin (C/O) for import custom clearance.\n" +
+    "Please send the quotation to this email address. We look forward to your prompt response.\n" +
+    "Thank you and best regards,\nGiang Pham"
+  }
+};
+const englishRfqRow = d.mailToRow(englishRfq);
+assert(d.includeMail(englishRfq) === true, "英文越南詢價未被納入");
+assert(englishRfqRow.公司名稱 === "UNIVERSAL SCIENTIFIC INDUSTRIAL (USI) Company", "英文 representing 公司名稱解析錯誤：" + englishRfqRow.公司名稱);
+assert(englishRfqRow.聯絡人 === "Giang Pham", "英文原始寄件者聯絡人解析錯誤");
+assert(englishRfqRow.Email === "phammgiang198@gmail.com", "英文詢價客戶 Email 解析錯誤");
+assert(englishRfqRow.中文摘要.includes("越南") && englishRfqRow.中文摘要.includes("CB-998D") && englishRfqRow.中文摘要.includes("1 件"), "英文詢價中文摘要缺少國家、型號或數量：" + englishRfqRow.中文摘要);
+assert(englishRfqRow.中文摘要.includes("單價與總價") && englishRfqRow.中文摘要.includes("原產地證明"), "英文詢價中文摘要缺少報價條件：" + englishRfqRow.中文摘要);
+assert(englishRfqRow.中文摘要.includes("Giang Pham") && englishRfqRow.中文摘要.includes("UNIVERSAL SCIENTIFIC INDUSTRIAL (USI) Company"), "中文摘要未帶入已確認的聯絡人與公司");
+assert(englishRfqRow.中文摘要.includes("AC 220V") && englishRfqRow.中文摘要.includes("海防港"), "中文摘要缺少電源需求或目的港");
+assert(englishRfqRow.詢問內容.includes("Vectech Digital SMD Hot Air Station"), "英文原文沒有保留供核對");
+const noHeaderName = { ...englishRfq, body: { contentType: "text", content: englishRfq.body.content.replace("From: Giang Pham <phammgiang198@gmail.com>", "From: <phammgiang198@gmail.com>") } };
+assert(d.mailToRow(noHeaderName).聯絡人 === "Giang", "英文 My name is 聯絡人備援解析錯誤");
+
 const websiteAircare = {
   ...fixture,
   id: "website-aircare",
@@ -132,7 +172,7 @@ const partsRow = d.mailToRow(partsInquiry);
 assert(partsRow.公司名稱 === "範例工具股份有限公司" && partsRow.Email === "parts@example.com" && partsRow.電話.includes("0225796363"), "焊台零件詢問的客戶欄位解析失敗");
 assert(partsRow.詢問內容.includes("烙鐵頭") && partsRow.詢問內容.includes("防燙墊"), "焊台零件需求內容沒有保留");
 
-const unrelatedOriginalHeader = "From: customer@example.com\\nSubject: Old inquiry\\n\\nOld content\\n\\nFrom: staff@cbtrade.com.tw\\nTo: sales@cbtrade.com.tw\\nSubject: Internal report";
+const unrelatedOriginalHeader = "From: customer@example.com\nSubject: Old inquiry\n\nOld content\n\nFrom: staff@cbtrade.com.tw\nTo: sales@cbtrade.com.tw\nSubject: Internal report";
 assert(d.hasOriginalSalesHeader(unrelatedOriginalHeader) === false, "錯誤跨郵件配對的原始 To=sales 被納入");
 const websiteForm = {
   ...fixture,
@@ -145,7 +185,7 @@ const websiteForm = {
 assert(d.includeMail(websiteForm) === true, "完整聯絡我們表單無法判定");
 const emptyWebsiteForm = {
   ...websiteForm,
-  body: { contentType: "text", content: "公司名稱: 廣達電腦\\n姓名: Henry Wang\\n聯絡電話: 03-3272345\\nEmail: henry_wang@quantatw.com\\n詢問內容: ____|" }
+  body: { contentType: "text", content: "公司名稱: 廣達電腦\n姓名: Henry Wang\n聯絡電話: 03-3272345\nEmail: henry_wang@quantatw.com\n詢問內容: ____|" }
 };
 assert(d.includeMail(emptyWebsiteForm) === false, "只有聯絡表單欄位但沒有詢問內容仍被納入");
 assert(d.includeMail({ ...fixture, subject: "RE: [A9D]離子風槍組評估 - 承邦" }) === false, "RE 回覆未排除");
@@ -169,15 +209,15 @@ assert(all.length === 241 && diag.pages === 3 && diag.total === 241 && diag.comp
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v64"), "index.html UI 版本不是 v64");
+assert(index.includes("APP v65"), "index.html UI 版本不是 v65");
 assert(index.includes('id="statDate" type="month"'), "統計日期欄位尚未改成月份選擇器");
-assert(index.includes('app-build" content="2026-10-12-v64"'), "頁面 build 版本未更新");
-assert(index.includes("app.js?v=20261012v64"), "index.html app.js 快取參數不同步");
-assert(index.includes('cache-build" content="v64"'), "index.html cache-build 不是 v64");
-assert(index.includes("app.js?v=20261012v64"), "index.html app.js cache query 不是 v64");
-assert(index.includes("sw.js?v=20261012v64"), "Service Worker 註冊版本不是 v64");
-assert(sw.includes('const CACHE_VERSION = "v64";'), "Service Worker cache version 不是 v64");
-assert(sw.includes("./app.js?v=20261012v64"), "Service Worker shell app.js 快取參數不同步");
+assert(index.includes('app-build" content="2026-10-12-v65"'), "頁面 build 版本未更新");
+assert(index.includes("app.js?v=20261012v65"), "index.html app.js 快取參數不同步");
+assert(index.includes('cache-build" content="v65"'), "index.html cache-build 不是 v65");
+assert(index.includes("app.js?v=20261012v65"), "index.html app.js cache query 不是 v65");
+assert(index.includes("sw.js?v=20261012v65"), "Service Worker 註冊版本不是 v65");
+assert(sw.includes('const CACHE_VERSION = "v65";'), "Service Worker cache version 不是 v65");
+assert(sw.includes("./app.js?v=20261012v65"), "Service Worker shell app.js 快取參數不同步");
 
 
 

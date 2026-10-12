@@ -11,8 +11,8 @@ const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
-const APP_VERSION="v64";
-const CACHE_VERSION="v64";
+const APP_VERSION="v65";
+const CACHE_VERSION="v65";
 const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
@@ -86,7 +86,7 @@ function normalizeMailText(v){
     .trim();
 }
 function isMailHeaderLine(line){
-  return /^(?:From|寄件者|寄件人|Sent|寄送|To|收件者|收件人|Cc|副本|Bcc|密件副本|Subject|主旨|標題|Date|日期|Reply-To|Received)s*[:：]/i.test(String(line||"").trim());
+  return /^(?:From|寄件者|寄件人|Sent|寄送|To|收件者|收件人|Cc|副本|Bcc|密件副本|Subject|主旨|標題|Date|日期|Reply-To|Received)\s*[:：]/i.test(String(line||"").trim());
 }
 function cleanPersonCandidate(value){
   let v=normalizeMailText(value)
@@ -309,19 +309,24 @@ function extractCompany(text){
   const lines=normalized.split("\n").map(x=>x.trim()).filter(Boolean);
   for(const line of lines){
     if(isMailHeaderLine(line)) continue;
-    const m=line.match(/^(?:我是|我為|來自|這邊是)\s*([\u4e00-\u9fffA-Za-z0-9&._\- ]{2,40}?)(?:\s*BU\s*\d+\b|\s*[-–—]\s*[A-Za-z]{2,20}\b|\s*,|\s*，)/i);
-    if(m?.[1]){
-      const candidate=cleanCompanyCandidate(m[1]);
+    const representing=line.match(/\brepresenting\s+(.{2,100}?)\s+based\s+in\b/i);
+    if(representing?.[1]){
+      const candidate=cleanCompanyCandidate(representing[1].replace(/[.,;:]+$/,""));
+      if(candidate&&!isOurCompanyName(candidate)) return candidate;
+    }
+    const chineseIntro=line.match(/^(?:我是|我為|來自|這邊是)\s*([\u4e00-\u9fffA-Za-z0-9&._\- ]{2,40}?)(?:\s*BU\s*\d+\b|\s*[-–—]\s*[A-Za-z]{2,20}\b|\s*,|\s*，)/i);
+    if(chineseIntro?.[1]){
+      const candidate=cleanCompanyCandidate(chineseIntro[1]);
       if(candidate&&!isOurCompanyName(candidate)) return candidate;
     }
   }
-  const companyLines=lines.filter(line=>{
+  for(const line of lines){
     const candidate=cleanCompanyCandidate(line);
-    return candidate.length>=3&&candidate.length<=80&&!isMailHeaderLine(line)&&
+    if(candidate.length>=3&&candidate.length<=100&&!isMailHeaderLine(line)&&
       !/@|https?:\/\//i.test(line)&&!isOurCompanyName(candidate)&&
-      /(?:股份有限公司|有限公司|企業|科技|電子|電腦|生技|Corporation|Inc\.?|Ltd\.?|Corp\.?|Co\.?\s*,?\s*Ltd\.?)/i.test(candidate);
-  });
-  return companyLines[0]||"";
+      /(?:股份有限公司|有限公司|企業|科技|電子|電腦|生技|Corporation|Inc\.?|Ltd\.?|Corp\.?|Company|Co\.?\s*,?\s*Ltd\.?)/i.test(candidate)) return candidate;
+  }
+  return "";
 }
 function extractContactName(text,mailMeta={}){
   const normalized=normalizeMailText(text);
@@ -343,6 +348,8 @@ function extractContactName(text,mailMeta={}){
     if(bilingual) return bilingual[1]+" ("+bilingual[2].trim()+")";
     const role=line.match(/^(?:採購|採買|聯絡人|窗口|業務|工程師|課長|經理|主任)\s*[:：]?\s*([\u4e00-\u9fff]{2,4})(?:\s|$)/);
     if(role) return role[1];
+    const englishIntro=line.match(/\bMy name is\s+([A-Z][A-Za-z.'’\-]*(?:\s+[A-Z][A-Za-z.'’\-]*){0,3})(?=\s*(?:[,.;]|representing\b|and\b|$))/i);
+    if(englishIntro) return cleanPersonCandidate(englishIntro[1]);
   }
   return "";
 }
@@ -394,6 +401,66 @@ function extractBodyQuestion(text){
   }
   return kept.join("\n").trim();
 }
+function readEnglishField(text,label){
+  const escape=value=>String(value).replace(/[|\\{}()[\]^$+*?.-]/g,"\\function parseCustomer(raw,subject,mailMeta={}){");
+  const line=normalizeMailText(text).split("\n").find(row=>new RegExp("^\\s*"+escape(label)+"\\s*:","i").test(row));
+  return line?line.replace(new RegExp("^\\s*"+escape(label)+"\\s*:\\s*","i"),"").trim():"";
+}
+function translateEnglishCountry(country){
+  const key=safeText(country).toLowerCase().replace(/[.]/g,"").trim();
+  const names={vietnam:"越南",taiwan:"台灣",india:"印度",japan:"日本",korea:"韓國","south korea":"韓國",china:"中國",thailand:"泰國",malaysia:"馬來西亞",singapore:"新加坡",indonesia:"印尼",philippines:"菲律賓",usa:"美國","united states":"美國",canada:"加拿大",germany:"德國",france:"法國",italy:"義大利",australia:"澳洲"};
+  return names[key]||country;
+}
+function buildChineseInquirySummary(text,customer={}){
+  const source=normalizeMailText(text);
+  if(!/\b(?:quotation|quote|purchas(?:e|ing)|commercial quotation|lead time|warranty|request for quotation)\b/i.test(source)) return "";
+  const person=safeText(customer.name)||((source.match(/\bMy name is\s+([A-Z][A-Za-z.'’\-]*(?:\s+[A-Z][A-Za-z.'’\-]*){0,3})/i)||[])[1]||"");
+  const company=safeText(customer.company);
+  const countryMatch=source.match(/\bbased in\s+([A-Za-z][A-Za-z .'-]*?)(?=[,.;\n]|$)/i);
+  const country=countryMatch?translateEnglishCountry(countryMatch[1].trim()):"";
+  const product=readEnglishField(source,"Product Name");
+  const model=readEnglishField(source,"Model");
+  const quantity=readEnglishField(source,"Quantity");
+  const power=readEnglishField(source,"Power Requirement");
+  const parts=[];
+  if(person) parts.push(person);
+  let intro=company?"代表 "+company:"";
+  if(country) intro+=(intro?"（"+country+"）":country);
+  if(intro) parts.push(intro);
+  const opening=/\binterested in purchas(?:e|ing)\b/i.test(source)?"有意採購並詢價":"詢價";
+  const request=[opening];
+  if(product) request.push("產品："+product);
+  if(model) request.push("型號 "+model);
+  if(quantity){
+    const q=quantity.match(/^([\d,.]+)\s*(?:units?|pieces?|pcs?)?\b/i);
+    request.push("數量 "+(q?q[1]:quantity)+(q?" 件":""));
+  }
+  if(power){
+    const voltage=power.split(/[（(]/)[0].trim().replace(/\s*-\s*/g,"、").replace(/\//g,"／");
+    request.push("電源需求 "+voltage+(country?"（符合"+country+"電網）":""));
+  }
+  let sentence=parts.length?parts.join(" ")+"，"+request.join("，"):request.join("，");
+  const asks=[];
+  if(/unit price|total price/i.test(source)){
+    let term="單價與總價";
+    if(/FOB/i.test(source)&&/CIF/i.test(source)) term+="（FOB 或 CIF";
+    else if(/FOB/i.test(source)) term+="（FOB";
+    else if(/CIF/i.test(source)) term+="（CIF";
+    const ports=[];
+    if(/ho\s*chi\s*minh/i.test(source)) ports.push("胡志明市");
+    if(/haiph?ong/i.test(source)) ports.push("海防港");
+    if(ports.length) term+=(term.endsWith("CIF")||term.endsWith("FOB")?" ":"（")+ports.join("／")+(country?"，"+country:"");
+    if(term.includes("（")) term+="）";
+    asks.push(term);
+  }
+  if(/lead time|delivery time/i.test(source)) asks.push("預估備貨交期及運送時間");
+  if(/warranty/i.test(source)) asks.push("產品保固資訊");
+  if(/certificate of origin|\bC\/?O\b/i.test(source)) asks.push("原產地證明（C/O）");
+  if(asks.length) sentence+="；請提供"+asks.join("、")+"。";
+  else sentence+="。";
+  if(/send the quotation to this email address/i.test(source)) sentence+=" 請將報價寄至此 Email。";
+  return sentence;
+}
 function parseCustomer(raw,subject,mailMeta={}){
   const fullText=normalizeMailText(raw);
   const directEmail=addr(mailMeta?.from)||addr(mailMeta?.sender);
@@ -424,6 +491,7 @@ function parseCustomer(raw,subject,mailMeta={}){
     email:safeText(email).replace(/[>，,。；;]+$/,"").trim().toLowerCase(),
     address:safeText(address),
     question:question.length>2000?question.slice(0,2000)+"…":question,
+    chineseSummary:buildChineseInquirySummary(t,{company:cleanCompanyCandidate(company),name:safeText(name)}),
     originalSubject
   };
 }
@@ -682,6 +750,7 @@ function makeRow(c,meta={}){
     Email: c.email || "",
     電話: c.phone || "",
     詢問內容: c.question || "",
+    中文摘要: c.chineseSummary || "",
     原始主旨: c.originalSubject || "",
     來源郵件: meta.source || "",
     Outlook郵件ID: meta.messageId || "",
@@ -730,7 +799,7 @@ function rowKey(r){
 function rowCompleteness(r){
   return [
     r.公司名稱,r.聯絡人,r.Email,r.電話,r.公司地址,
-    r.詢問內容,r.業務人員,r.原始主旨
+    r.詢問內容,r.中文摘要,r.業務人員,r.原始主旨
   ].reduce((n,v)=>n+(safeText(v)?1:0),0)*10000+safeText(r.詢問內容).length;
 }
 function inquiryTextBigrams(r){
@@ -861,7 +930,10 @@ function render(){
       r.公司地址 && "地址: " + r.公司地址,
       r.業務人員 && "業務: " + r.業務人員
     ].filter(Boolean).map(esc).join("　");
-    return '<div class="item"><b>' + esc(company) + '　' + esc(contact) + '</b><div class="meta">' + meta + '</div><div class="q">' + esc(r.詢問內容 || "") + '</div></div>';
+    const summary = safeText(r.中文摘要)
+      ? '<div class="qzh"><b>英文詢價中文摘要</b>：' + esc(r.中文摘要) + '</div>'
+      : '';
+    return '<div class="item"><b>' + esc(company) + '　' + esc(contact) + '</b><div class="meta">' + meta + '</div>' + summary + '<div class="q"><b>原文</b><br>' + esc(r.詢問內容 || "") + '</div></div>';
   }).join("");
 }
 
@@ -1360,12 +1432,12 @@ function addManual(){
 }
 
 function xlsxSheet(rows){
-  const headers = ["日期","公司名稱","聯絡人","Email","電話","公司地址","原始主旨","詢問內容","業務人員","是否成交","成交金額"];
-  const data = [headers, ...rows.map(r => [r.日期 || "", r.公司名稱 || "", r.聯絡人 || "", r.Email || "", r.電話 || "", r.公司地址 || "", r.原始主旨 || "", r.詢問內容 || "", r.業務人員 || "", r.是否成交 || "", r.成交金額 || ""])];
+  const headers = ["日期","公司名稱","聯絡人","Email","電話","公司地址","原始主旨","詢問內容","業務人員","是否成交","成交金額","英文詢價中文摘要"];
+  const data = [headers, ...rows.map(r => [r.日期 || "", r.公司名稱 || "", r.聯絡人 || "", r.Email || "", r.電話 || "", r.公司地址 || "", r.原始主旨 || "", r.詢問內容 || "", r.業務人員 || "", r.是否成交 || "", r.成交金額 || "", r.中文摘要 || ""])];
   const ws = XLSX.utils.aoa_to_sheet(data);
-  ws["!cols"] = [{wch:12},{wch:26},{wch:18},{wch:30},{wch:20},{wch:40},{wch:38},{wch:64},{wch:16},{wch:12},{wch:14}];
-  ws["!rows"] = [{hpt:24}, ...rows.map(r => ({ hpt: Math.min(210, Math.max(60, 42 + Math.ceil((r.詢問內容 || "").length / 55) * 18)) }))];
-  ws["!autofilter"] = { ref: "A1:K" + data.length };
+  ws["!cols"] = [{wch:12},{wch:26},{wch:18},{wch:30},{wch:20},{wch:40},{wch:38},{wch:64},{wch:16},{wch:12},{wch:14},{wch:70}];
+  ws["!rows"] = [{hpt:24}, ...rows.map(r => ({ hpt: Math.min(210, Math.max(60, 42 + Math.ceil(Math.max((r.詢問內容 || "").length,(r.中文摘要 || "").length) / 55) * 18)) }))];
+  ws["!autofilter"] = { ref: "A1:L" + data.length };
   const headerStyle = { font:{name:"Microsoft JhengHei",bold:true,color:{rgb:"FFFFFF"}}, fill:{fgColor:{rgb:"4472C4"}}, alignment:{horizontal:"center",vertical:"center",wrap_text:true}, border:{top:{style:"thin",color:{rgb:"B7C9D6"}},bottom:{style:"thin",color:{rgb:"B7C9D6"}},left:{style:"thin",color:{rgb:"B7C9D6"}},right:{style:"thin",color:{rgb:"B7C9D6"}}} };
   for (let c=0;c<headers.length;c++) ws[XLSX.utils.encode_cell({r:0,c})].s = headerStyle;
   for (let r=1;r<data.length;r++) for (let c=0;c<headers.length;c++) {
@@ -1518,6 +1590,9 @@ window.__mailDiagnostics={
   appVersion:APP_VERSION,
   cacheVersion:CACHE_VERSION,
   hasCustomerEvidence,
+  buildChineseInquirySummary,
+  extractCompany,
+  extractContactName,
 
   includeMail,
   noiseMail,
