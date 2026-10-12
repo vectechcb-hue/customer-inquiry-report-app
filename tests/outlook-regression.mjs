@@ -84,6 +84,54 @@ assert(markdownRow.詢問內容.includes("推薦離子風槍組") && !markdownRo
 const lessComplete = { ...markdownRow, 聯絡人: "", 詢問內容: "詢價離子風槍組" };
 const mergedRows = d.dedupe([lessComplete, markdownRow]);
 assert(mergedRows.length === 1 && mergedRows[0].聯絡人 === "Henry Wang (王雲鴻)", "重複詢問未保留較完整資料");
+
+const websiteAircare = {
+  ...fixture,
+  id: "website-aircare",
+  subject: "FW: 承邦有限公司 聯絡我們",
+  from: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  toRecipients: [{ emailAddress: { address: "alan@cbtrade.com.tw" } }],
+  receivedDateTime: "2026-10-07T00:40:00Z",
+  body: { contentType: "text", content: "From: From[alex@example.com] <newoil@mail.newoil.com.tw>\nSent: Wednesday, October 7, 2026 8:40 AM\nTo: sales@cbtrade.com.tw\nSubject: 承邦有限公司 聯絡我們\n公司名稱: 範例科技有限公司\n姓名: 王小明\n聯絡電話: 0912345678\nEmail: alex@example.com\nWebsite: https://example.com\n詢問內容:| 請報價 1:AIRCARE100AD.AIRCARE101AD 售價與濾心更換週期" }
+};
+const directAircare = {
+  ...fixture,
+  id: "direct-aircare",
+  subject: "FW: 請問 AIRCARE101AD 與 AIRCARE100AD 售價",
+  from: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  toRecipients: [{ emailAddress: { address: "alan@cbtrade.com.tw" } }],
+  receivedDateTime: "2026-10-08T01:07:00Z",
+  body: { contentType: "text", content: "From: Alex Wang <alex@example.com>\nSent: Thursday, October 8, 2026 9:07 AM\nTo: sales@cbtrade.com.tw\nSubject: 請問 AIRCARE101AD 與 AIRCARE100AD 售價\n請問 AIRCARE101AD 與 AIRCARE100AD 售價是多少？另詢問濾心價格與更換週期。" }
+};
+assert(d.includeMail(websiteAircare) && d.includeMail(directAircare), "網站與直接詢價樣本未通過篩選");
+const websiteAircareRow = d.mailToRow(websiteAircare);
+const directAircareRow = d.mailToRow(directAircare);
+assert(JSON.stringify(d.extractInquiryProducts(websiteAircareRow)) === JSON.stringify(["aircare100ad","aircare101ad"]), "相連標點的兩個 AIRCARE 型號未分別解析");
+const aircareMerged = d.dedupe([websiteAircareRow,directAircareRow]);
+assert(aircareMerged.length === 1, "同客戶網站表單與郵件中的同產品詢問未合併");
+assert(aircareMerged[0].公司名稱 === "範例科技有限公司" && aircareMerged[0].聯絡人 === "王小明" && aircareMerged[0].電話 === "0912345678", "合併後未保留較完整的客戶資料");
+const differentProduct = { ...directAircare, subject: "FW: RV-720 報價", body: { contentType: "text", content: "From: Alex Wang <alex@example.com>\nTo: sales@cbtrade.com.tw\nSubject: RV-720 報價\n請提供 RV-720 報價與交期。" } };
+assert(d.dedupe([directAircareRow,d.mailToRow(differentProduct)]).length === 2, "同一客戶的不同產品詢問被錯誤合併");
+const similarQuestionA = { 來源平台: "Outlook", Email: "alex@example.com", 電話: "0912345678", 原始主旨: "", 詢問內容: "想買烙鐵頭與防燙墊" };
+const similarQuestionB = { ...similarQuestionA, 詢問內容: "想購買烙鐵頭和防燙墊" };
+assert(d.dedupe([similarQuestionA,similarQuestionB]).length === 1, "沒有型號但內容相似的同客戶詢問未合併");
+
+const partsInquiry = {
+  ...fixture,
+  id: "parts-inquiry",
+  subject: "FW: 承邦有限公司 聯絡我們",
+  from: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  sender: { emailAddress: { name: "Sales", address: "sales@cbtrade.com.tw" } },
+  toRecipients: [{ emailAddress: { address: "alan@cbtrade.com.tw" } }],
+  body: { contentType: "text", content: "From: From[parts@example.com] <newoil@mail.newoil.com.tw>\nSent: Tuesday, October 6, 2026 10:21 AM\nTo: sales@cbtrade.com.tw\nSubject: 承邦有限公司 聯絡我們\n公司名稱: 範例工具股份有限公司\n姓名: 陳先生\n聯絡電話: 0225796363#209\nEmail: parts@example.com\nWebsite: https://example.com\n詢問內容:| VECTECH SD-10 無鉛焊台 我要更換烙鐵頭，弄壞了手柄，想要買手柄跟防燙墊" }
+};
+assert(d.includeMail(partsInquiry) === true, "焊台零件與更換需求仍遭排除");
+const partsRow = d.mailToRow(partsInquiry);
+assert(partsRow.公司名稱 === "範例工具股份有限公司" && partsRow.Email === "parts@example.com" && partsRow.電話.includes("0225796363"), "焊台零件詢問的客戶欄位解析失敗");
+assert(partsRow.詢問內容.includes("烙鐵頭") && partsRow.詢問內容.includes("防燙墊"), "焊台零件需求內容沒有保留");
+
 const unrelatedOriginalHeader = "From: customer@example.com\\nSubject: Old inquiry\\n\\nOld content\\n\\nFrom: staff@cbtrade.com.tw\\nTo: sales@cbtrade.com.tw\\nSubject: Internal report";
 assert(d.hasOriginalSalesHeader(unrelatedOriginalHeader) === false, "錯誤跨郵件配對的原始 To=sales 被納入");
 const websiteForm = {
@@ -121,15 +169,15 @@ assert(all.length === 241 && diag.pages === 3 && diag.total === 241 && diag.comp
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v63"), "index.html UI 版本不是 v63");
+assert(index.includes("APP v64"), "index.html UI 版本不是 v64");
 assert(index.includes('id="statDate" type="month"'), "統計日期欄位尚未改成月份選擇器");
-assert(index.includes('app-build" content="2026-10-12-v63"'), "頁面 build 版本未更新");
-assert(index.includes("app.js?v=20261012v63"), "index.html app.js 快取參數不同步");
-assert(index.includes('cache-build" content="v63"'), "index.html cache-build 不是 v63");
-assert(index.includes("app.js?v=20261012v63"), "index.html app.js cache query 不是 v63");
-assert(index.includes("sw.js?v=20261012v63"), "Service Worker 註冊版本不是 v63");
-assert(sw.includes('const CACHE_VERSION = "v63";'), "Service Worker cache version 不是 v63");
-assert(sw.includes("./app.js?v=20261012v63"), "Service Worker shell app.js 快取參數不同步");
+assert(index.includes('app-build" content="2026-10-12-v64"'), "頁面 build 版本未更新");
+assert(index.includes("app.js?v=20261012v64"), "index.html app.js 快取參數不同步");
+assert(index.includes('cache-build" content="v64"'), "index.html cache-build 不是 v64");
+assert(index.includes("app.js?v=20261012v64"), "index.html app.js cache query 不是 v64");
+assert(index.includes("sw.js?v=20261012v64"), "Service Worker 註冊版本不是 v64");
+assert(sw.includes('const CACHE_VERSION = "v64";'), "Service Worker cache version 不是 v64");
+assert(sw.includes("./app.js?v=20261012v64"), "Service Worker shell app.js 快取參數不同步");
 
 
 

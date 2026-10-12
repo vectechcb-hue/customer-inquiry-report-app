@@ -11,8 +11,8 @@ const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
-const APP_VERSION="v63";
-const CACHE_VERSION="v63";
+const APP_VERSION="v64";
+const CACHE_VERSION="v64";
 const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
@@ -562,13 +562,16 @@ function hasExplicitInquiryIntent(text){
     if(!line||isMailHeaderLine(line)) return false;
     return !/^(?:公司名稱|公司名|公司地址|公司電話|姓名|聯絡人|聯絡姓名|窗口|地址|聯絡電話|電話|Email|E-mail|Website|網站)\s*[:：]/i.test(line);
   }).join("\n");
-  const directRequest=/(詢價|報價|詢問|inquiry|quotation|purchase|order|採購|購買|訂購|下單)/i.test(lines);
-  const askRequest=/(請問|想了解|想詢問|煩請|請提供|請協助|麻煩|可否|是否(?:能|可以)|有沒有|希望|需要)/i.test(lines);
-  const askObject=/(規格|報價|價格|費用|交期|產品|設備|機台|型號|方案|資料|推薦|協助|購買|採購|訂購|下單)/i.test(lines);
+  const directRequest=/(詢價|報價|詢問|inquiry|quotation|purchase|order|採購|購買|買|訂購|下單)/i.test(lines);
+  const askRequest=/(請問|想了解|想詢問|想要|我要|要買|煩請|請提供|請協助|麻煩|可否|是否(?:能|可以)|有沒有|希望|需要|更換|替換|維修|修理)/i.test(lines);
+  const askObject=/(規格|報價|價格|費用|交期|產品|設備|機台|焊台|型號|方案|資料|推薦|協助|購買|採購|訂購|下單|烙鐵頭|手柄|把手|防燙墊|零件|配件|耗材|濾芯|過濾器|替換頭)/i.test(lines);
+  const partsRepairRequest=/(?:想要|我要|要買|買|購買|更換|替換|換新|維修|修理|弄壞|壞了|故障)/i.test(lines) &&
+    /(?:烙鐵頭|焊台|手柄|把手|防燙墊|零件|配件|耗材|濾芯|過濾器|替換頭|產品型號)/i.test(lines);
   const priceQuestion=/(?:價格|費用).{0,30}[?？]|[?？].{0,30}(?:價格|費用)/i.test(lines);
   const recommendRequest=/(?:煩請|請|麻煩|希望|需要|想).{0,50}(?:推薦|評估)/i.test(lines);
   const questionMark=/[?？]/.test(lines);
-  return directRequest || (askRequest&&askObject) || (recommendRequest&&askObject) || priceQuestion || (questionMark&&askObject);
+  return directRequest || (askRequest&&askObject) || partsRepairRequest ||
+    (recommendRequest&&askObject) || priceQuestion || (questionMark&&askObject);
 }
 function hasOperationalNoise(text){
   const t=htmlToText(text).toLowerCase();
@@ -697,42 +700,91 @@ function normalizeInquiryText(v){
     .trim();
 }
 function extractInquiryProducts(r){
-  const t = normalizeInquiryText([r.原始主旨 || "", r.詢問內容 || ""].join(" "));
-  const hits = t.match(/\b[a-z]{1,15}[-_ ]?\d{2,}[a-z0-9._-]*\b|\b\d{2,}[a-z]{1,15}\b/gi) || [];
+  const text=[r.原始主旨 || "",r.詢問內容 || ""].join(" ");
+  // A dot or other punctuation separates adjacent model numbers in some website forms.
+  // Keep each model token independent so AIRCARE100AD.AIRCARE101AD yields two IDs.
+  const pattern=/(?<![A-Z0-9])([A-Z]{1,15}[ _-]?\d{2,}[A-Z0-9_-]*|\d{2,}[A-Z]{1,15})(?![A-Z0-9])/gi;
+  const hits=[];
+  let match;
+  while((match=pattern.exec(text))) hits.push(match[1]);
   return [...new Set(hits.map(x=>x.replace(/\s+/g,"").toLowerCase()))].sort();
 }
 function rowKey(r){
-  const platform = safeText(r.來源平台 || "Outlook");
-  const email = safeText(r.Email).toLowerCase();
-  const lineUser = safeText(r.LINE用戶ID);
-  const company = normalizeInquiryText(r.公司名稱);
-  const contact = normalizeInquiryText(r.聯絡人);
-  const phone = safeText(r.電話).replace(/\D/g,"");
-  const subject = normalizeInquiryText(cleanSubject(r.原始主旨));
-  const question = normalizeInquiryText(r.詢問內容);
-  if (platform === "LINE") {
-    const products = safeText(r.產品型號).toLowerCase().replace(/[\s\u3000,，、/]+/g,"/");
-    return [platform, email || lineUser || contact, products || subject || question.slice(0,120), isoDate(r.日期)].join("|");
+  const platform=safeText(r.來源平台||"Outlook");
+  const email=safeText(r.Email).toLowerCase();
+  const lineUser=safeText(r.LINE用戶ID);
+  const company=normalizeInquiryText(r.公司名稱);
+  const contact=normalizeInquiryText(r.聯絡人);
+  const phone=safeText(r.電話).replace(/\D/g,"");
+  const subject=normalizeInquiryText(cleanSubject(r.原始主旨));
+  const question=normalizeInquiryText(r.詢問內容);
+  if(platform==="LINE"){
+    const products=safeText(r.產品型號).toLowerCase().replace(/[\s\u3000,，、/]+/g,"/");
+    return [platform,email||lineUser||contact,products||subject||question.slice(0,120),isoDate(r.日期)].join("|");
   }
-  const identity = email || phone || company || contact || "unknown";
-  const products = extractInquiryProducts(r);
-  const topic = products.length ? products.join("/") : (subject || question.slice(0,180));
-  return [platform, identity, topic].join("|");
+  const identity=email||phone||company||contact||"unknown";
+  const products=extractInquiryProducts(r);
+  const topic=products.length?products.join("/"):(subject||question.slice(0,180));
+  return [platform,identity,topic].join("|");
 }
 function rowCompleteness(r){
   return [
-    r.公司名稱, r.聯絡人, r.Email, r.電話, r.公司地址,
-    r.詢問內容, r.業務人員, r.原始主旨
-  ].reduce((n,v)=>n+(safeText(v)?1:0),0)*10000 + safeText(r.詢問內容).length;
+    r.公司名稱,r.聯絡人,r.Email,r.電話,r.公司地址,
+    r.詢問內容,r.業務人員,r.原始主旨
+  ].reduce((n,v)=>n+(safeText(v)?1:0),0)*10000+safeText(r.詢問內容).length;
+}
+function inquiryTextBigrams(r){
+  const text=safeText(r.詢問內容).toLowerCase()
+    .replace(/(?:您好|你好|hi|dear|請問|詢價|報價|煩請|麻煩|請協助|請提供|希望|需要|想要|我要|要買|購買|買|謝謝|感謝|承邦有限公司|威鐵克|vectech)/gi,"")
+    .replace(/[^\p{L}\p{N}]+/gu,"");
+  const chars=Array.from(text);
+  const grams=new Set();
+  for(let i=0;i<chars.length-1;i++) grams.add(chars[i]+chars[i+1]);
+  return grams;
+}
+function inquiryTextSimilarity(a,b){
+  const left=inquiryTextBigrams(a),right=inquiryTextBigrams(b);
+  if(!left.size||!right.size) return 0;
+  let overlap=0;
+  for(const gram of left) if(right.has(gram)) overlap++;
+  const dice=(2*overlap)/(left.size+right.size);
+  const shorterCoverage=overlap/Math.min(left.size,right.size);
+  return Math.max(dice,shorterCoverage);
+}
+function sameVerifiedCustomer(a,b){
+  const emailA=safeText(a.Email).toLowerCase();
+  const emailB=safeText(b.Email).toLowerCase();
+  if(emailA&&emailB&&isExternalEmail(emailA)&&isExternalEmail(emailB)&&emailA===emailB) return true;
+  const phoneA=safeText(a.電話).replace(/\D/g,"");
+  const phoneB=safeText(b.電話).replace(/\D/g,"");
+  return phoneA.length>=8&&phoneB.length>=8&&phoneA===phoneB;
+}
+function sameOutlookInquiry(a,b){
+  if(!sameVerifiedCustomer(a,b)) return false;
+  const productsA=extractInquiryProducts(a),productsB=extractInquiryProducts(b);
+  if(productsA.length&&productsB.length){
+    return productsA.some(product=>productsB.includes(product));
+  }
+  return inquiryTextSimilarity(a,b)>=0.70;
 }
 function dedupe(rows){
-  const map = new Map();
-  for (const r of rows) {
-    const key = rowKey(r);
-    const old = map.get(key);
-    if (!old || rowCompleteness(r) > rowCompleteness(old)) map.set(key, r);
+  const outlookGroups=[];
+  const otherRows=new Map();
+  for(const row of rows){
+    if(safeText(row.來源平台||"Outlook")!=="Outlook"){
+      const key=rowKey(row),old=otherRows.get(key);
+      if(!old||rowCompleteness(row)>rowCompleteness(old)) otherRows.set(key,row);
+      continue;
+    }
+    const group=outlookGroups.find(candidate=>candidate.rows.some(existing=>sameOutlookInquiry(existing,row)));
+    if(group){
+      group.rows.push(row);
+      if(rowCompleteness(row)>rowCompleteness(group.best)) group.best=row;
+    }else{
+      outlookGroups.push({rows:[row],best:row});
+    }
   }
-  return [...map.values()];
+  return [...outlookGroups.map(group=>group.best),...otherRows.values()];
 }
 function mailToRow(m){
   const raw = m.body?.content || m.bodyPreview || "";
@@ -1479,6 +1531,8 @@ window.__mailDiagnostics={
   extractBodyQuestion,
   isoDate,
   dedupe,
+  extractInquiryProducts,
+  inquiryTextSimilarity,
   hasOriginalSalesHeader,
   heuristicInquiry,
   accountEmails,
