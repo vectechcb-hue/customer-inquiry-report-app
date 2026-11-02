@@ -209,15 +209,15 @@ assert(all.length === 241 && diag.pages === 3 && diag.total === 241 && diag.comp
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v65"), "index.html UI 版本不是 v65");
+assert(index.includes("APP v66"), "index.html UI 版本不是 v66");
 assert(index.includes('id="statDate" type="month"'), "統計日期欄位尚未改成月份選擇器");
-assert(index.includes('app-build" content="2026-10-12-v65"'), "頁面 build 版本未更新");
-assert(index.includes("app.js?v=20261012v65"), "index.html app.js 快取參數不同步");
-assert(index.includes('cache-build" content="v65"'), "index.html cache-build 不是 v65");
-assert(index.includes("app.js?v=20261012v65"), "index.html app.js cache query 不是 v65");
-assert(index.includes("sw.js?v=20261012v65"), "Service Worker 註冊版本不是 v65");
-assert(sw.includes('const CACHE_VERSION = "v65";'), "Service Worker cache version 不是 v65");
-assert(sw.includes("./app.js?v=20261012v65"), "Service Worker shell app.js 快取參數不同步");
+assert(index.includes('app-build" content="2026-11-02-v66"'), "頁面 build 版本未更新");
+assert(index.includes("app.js?v=20261102v66"), "index.html app.js 快取參數不同步");
+assert(index.includes('cache-build" content="v66"'), "index.html cache-build 不是 v66");
+assert(index.includes("app.js?v=20261102v66"), "index.html app.js cache query 不是 v66");
+assert(index.includes("sw.js?v=20261102v66"), "Service Worker 註冊版本不是 v66");
+assert(sw.includes('const CACHE_VERSION = "v66";'), "Service Worker cache version 不是 v66");
+assert(sw.includes("./app.js?v=20261102v66"), "Service Worker shell app.js 快取參數不同步");
 
 
 
