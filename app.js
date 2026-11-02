@@ -11,8 +11,8 @@ const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
-const APP_VERSION="v66";
-const CACHE_VERSION="v66";
+const APP_VERSION="v68";
+const CACHE_VERSION="v68";
 const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
@@ -1133,7 +1133,10 @@ async function fetchLineRows(start, end){
   // retrieve it through the Worker and run local OCR so business cards,
   // product tables and screenshots can contribute to the same case.
   const enriched = await enrichLineEventsWithOCR(events, base, key);
-  return buildLineConversationCases(enriched);
+  const rows = buildLineConversationCases(enriched);
+  rows.sourceEventCount = events.length;
+  rows.sourceUserCount = new Set(events.map(e=>safeText(e.userId)).filter(Boolean)).size;
+  return rows;
 }
 
 async function enrichLineEventsWithOCR(events, base, key){
@@ -1169,13 +1172,19 @@ function cleanLineMessageText(text){
     .trim();
 }
 
+function normalizeLineFieldText(text){
+  return htmlToText(text)
+    .replace(/([^\n])\s*(?=[1-6]\s*[\.、\)）:：]\s*(?:產品|公司|地址|聯絡人|電話|Email|E-mail|姓名))/gi,"$1\n")
+    .replace(/([^\n])\s+(?=(?:公司名稱|公司名|公司|公司地址|地址|聯絡人(?:mail|email|電話|姓名)?|Email|E-mail|電話|姓名|詢問內容|需求|問題|留言)\s*[:：])/gi,"$1\n");
+}
 function extractNumberedSix(text){
-  const lines = htmlToText(text).split("\n").map(x => x.trim()).filter(Boolean);
+  const lines = normalizeLineFieldText(text).split("\n").map(x => x.trim()).filter(Boolean);
   const found = {};
+  const label = /^(?:產品(?:型號|名稱)?|型號|Model|Part\s*No\.?|P\/N|公司(?:名稱|名)?|公司地址|地址|聯絡人(?:mail|email|電話|姓名)?|Email|E-mail|電話|姓名)\s*[:：]\s*/i;
   for (let i=0;i<lines.length;i++) {
     const m = lines[i].match(/^([1-6])\s*[\.、\)）:：]\s*(.+)$/);
     if (!m) continue;
-    found[m[1]] = m[2].trim();
+    found[m[1]] = m[2].trim().replace(label,"").trim();
   }
   if ([1,2,3,4,5,6].every(k => found[k])) {
     return {
@@ -1191,12 +1200,13 @@ function extractNumberedSix(text){
 }
 
 function extractLineProducts(text){
-  const t = htmlToText(text);
+  const t = normalizeLineFieldText(text);
   const out = [];
-  const explicit = t.match(/(?:產品(?:型號|名稱)?|產品|型號|Model|Part\s*No\.?|P\/N)\s*[:：]?\s*([^\n]+)/ig) || [];
+  // Explicit product/model labels only; "產品型錄" is not a model.
+  const explicit = t.match(/(?:產品型號|產品名稱|型號|Model|Part\s*No\.?|P\/N)\s*[:：]?\s*([^\n]+)/ig) || [];
   for (const x of explicit) {
     const m = x.match(/[:：]\s*(.+)$/);
-    if (m?.[1]) out.push(...m[1].split(/[,，、/\n]+/).map(s=>s.trim()).filter(Boolean));
+    if (m?.[1]) out.push(...m[1].split(/[,，、;；\/\n]+/).map(s=>s.trim()).filter(Boolean));
   }
   const generic = t.match(/\b[A-Za-z]{1,12}[-_ ]?\d{2,}[A-Za-z0-9._-]*\b|\b\d{2,}[A-Za-z]{1,12}\b/g) || [];
   out.push(...generic);
@@ -1207,7 +1217,8 @@ function lineHasCommercialIntent(text){
   const t = htmlToText(text).toLowerCase();
   const keys = [
     "報價","報價單","詢價","詢問價格","價格","多少錢","費用","報價跟交期","交期","交貨",
-    "採購","購買","訂購","下單","數量","幫我查","幫我報","開報價","請報","請報價",
+    "採購","購買","買","訂購","下單","數量","幫我查","幫我報","開報價","請報","請報價",
+    "更換","維修","修理","替換","零件","配件","耗材","烙鐵頭","焊頭","手柄","防燙墊","repair","replace","replacement","spare part",
     "代理商","經銷","客人","客戶","在找這個型號","有這個嗎","有嗎","規格","料號",
     "quote","quotation","price","lead time","purchase","order","dealer","customer"
   ];
@@ -1220,17 +1231,19 @@ function lineIsAcknowledgement(text){
 }
 
 function parseLineCustomer(text, displayName){
-  const t = htmlToText(text);
+  const t = normalizeLineFieldText(text);
   const six = extractNumberedSix(t);
 
   const email = (t.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [""])[0];
-  const phone = (t.match(/(?:0\d{1,2}[-\s]?\d{6,8}(?:#\d{1,5})?|09\d{2}[-\s]?\d{3}[-\s]?\d{3})/) || [""])[0];
+  const phone = (t.match(/(?:0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}(?:#\d{1,5})?|0\d{1,2}[-\s]?\d{6,8}(?:#\d{1,5})?|09\d{2}[-\s]?\d{3}[-\s]?\d{3})/) || [""])[0];
   const company = (six?.company || (t.match(/(?:公司名稱|公司名|公司)\s*[:：]\s*([^\n]+)/i) || ["",""])[1] || "").trim();
   const address = (six?.address || (t.match(/(?:地址|公司地址)\s*[:：]\s*([^\n]+)/i) || ["",""])[1] || "").trim();
   const name = (six?.name || (t.match(/(?:姓名|聯絡人|名字)\s*[:：]\s*([^\n]+)/i) || ["", displayName])[1] || displayName).trim();
 
   let question = "";
-  const qm = t.match(/(?:詢問內容|問題|需求|想詢問|請問|留言)\s*[:：]?\s*([\s\S]+)/i);
+  const labeledQuestion = t.match(/(?:詢問內容|問題|留言)\s*[:：]\s*([\s\S]*?)(?=\n(?:公司名稱|公司名|公司|聯絡人|電話|Email|E-mail|地址)\s*[:：]|$)/i);
+  const promptQuestion = t.match(/(?:想詢問|請問)\s*[:：]?\s*([\s\S]+)/i);
+  const qm = labeledQuestion || promptQuestion;
   if (qm?.[1]) question = qm[1].trim();
 
   return {
@@ -1273,7 +1286,7 @@ function buildLineConversationCases(events){
 
       const commercial = lineHasCommercialIntent(rawText);
       const completeSix = !!extractNumberedSix(rawText);
-      const externalEvidence = !!(c.email || c.phone || c.company || c.address || c.name);
+      const externalEvidence = !!(c.email || c.phone || (c.company && (c.name || current.displayName)) || (c.address && (c.name || current.displayName)));
       const hasImage = current.events.some(e => e.messageType === "image");
       const meaningful = current.events
         .map(e => cleanLineMessageText(e.text || e.ocrText || ""))
@@ -1282,7 +1295,8 @@ function buildLineConversationCases(events){
       const valid = completeSix ||
         (productList.length > 0 && commercial) ||
         (productList.length > 0 && /代理商|經銷|客人|客戶|在找這個型號/i.test(rawText)) ||
-        (hasImage && commercial && meaningful.length > 0 && (c.company || c.name || c.phone || c.email));
+        (commercial && externalEvidence && meaningful.length > 0) ||
+        (hasImage && commercial && meaningful.length > 0 && externalEvidence);
 
       if (!valid) return;
 
@@ -1543,7 +1557,7 @@ function setup(){
       if (!base) throw new Error("請先輸入 LINE API 網址");
       const {start,end}=getTaipeiMonthRange();
       const rows = await fetchLineRows(start,end);
-      byId("lineStatus").textContent = "連線成功：此月份目前取得 " + rows.length + " 筆 LINE 訊息";
+      byId("lineStatus").textContent = "連線成功：取得原始訊息 " + (rows.sourceEventCount || 0) + " 則（" + (rows.sourceUserCount || 0) + " 位使用者），整理出 " + rows.length + " 筆網路客戶詢問";
     } catch(e) {
       byId("lineStatus").textContent = "連線失敗：" + e.message;
     }
@@ -1588,6 +1602,10 @@ window.connectOutlook=loginAndConnect;
 window.runOutlookScan=runScan;
 window.__mailDiagnostics={
   appVersion:APP_VERSION,
+  extractNumberedSix,
+  extractLineProducts,
+  lineHasCommercialIntent,
+  buildLineConversationCases,
   cacheVersion:CACHE_VERSION,
   hasCustomerEvidence,
   buildChineseInquirySummary,
