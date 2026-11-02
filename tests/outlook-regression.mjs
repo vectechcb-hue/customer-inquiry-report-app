@@ -209,15 +209,15 @@ assert(all.length === 241 && diag.pages === 3 && diag.total === 241 && diag.comp
 
 const index = fs.readFileSync("index.html", "utf8");
 const sw = fs.readFileSync("sw.js", "utf8");
-assert(index.includes("APP v68"), "index.html UI 版本不是 v68");
+assert(index.includes("APP v69"), "index.html UI 版本不是 v69");
 assert(index.includes('id="statDate" type="month"'), "統計日期欄位尚未改成月份選擇器");
-assert(index.includes('app-build" content="2026-11-02-v68"'), "頁面 build 版本未更新");
-assert(index.includes("app.js?v=20261102v68"), "index.html app.js 快取參數不同步");
-assert(index.includes('cache-build" content="v68"'), "index.html cache-build 不是 v68");
-assert(index.includes("app.js?v=20261102v68"), "index.html app.js cache query 不是 v68");
-assert(index.includes("sw.js?v=20261102v68"), "Service Worker 註冊版本不是 v68");
-assert(sw.includes('const CACHE_VERSION = "v68";'), "Service Worker cache version 不是 v68");
-assert(sw.includes("./app.js?v=20261102v68"), "Service Worker shell app.js 快取參數不同步");
+assert(index.includes('app-build" content="2026-11-02-v69"'), "頁面 build 版本未更新");
+assert(index.includes("app.js?v=20261102v69"), "index.html app.js 快取參數不同步");
+assert(index.includes('cache-build" content="v69"'), "index.html cache-build 不是 v69");
+assert(index.includes("app.js?v=20261102v69"), "index.html app.js cache query 不是 v69");
+assert(index.includes("sw.js?v=20261102v69"), "Service Worker 註冊版本不是 v69");
+assert(sw.includes('const CACHE_VERSION = "v69";'), "Service Worker cache version 不是 v69");
+assert(sw.includes("./app.js?v=20261102v69"), "Service Worker shell app.js 快取參數不同步");
 
 
 
@@ -400,4 +400,75 @@ assert(repairCases[0].電話.includes("03-1234567"), "LINE 維修零件電話解
 assert(repairCases[0].詢問內容.includes("更換烙鐵頭"), "LINE 維修零件詢問內容未保留");
 assert(repairCases[0]["產品型號"].includes("SD-10"), "LINE SD-10 型號解析錯誤");
 
-console.log("OUTLOOK_AND_LINE_REGRESSION_PASS");
+
+const exportCapture = { workbook: null, filename: "" };
+function excelColumnName(index) {
+  let value = index + 1, name = "";
+  while (value > 0) { const rem = (value - 1) % 26; name = String.fromCharCode(65 + rem) + name; value = Math.floor((value - 1) / 26); }
+  return name;
+}
+function excelColumnIndex(name) {
+  return name.split("").reduce((value,char)=>value*26+char.charCodeAt(0)-64,0)-1;
+}
+const exportXlsx = {
+  utils: {
+    aoa_to_sheet(data) {
+      const rows = data.map(row => Array.from(row || []));
+      const maxColumns = Math.max(1,...rows.map(row=>row.length));
+      const sheet = { "!data": rows, "!ref": `A1:${excelColumnName(maxColumns-1)}${Math.max(rows.length,1)}` };
+      rows.forEach((row,r)=>row.forEach((value,c)=>{ sheet[`${excelColumnName(c)}${r+1}`] = { v:value }; }));
+      return sheet;
+    },
+    encode_cell({r,c}) { return `${excelColumnName(c)}${r+1}`; },
+    decode_range(ref) {
+      const match = ref.match(/^[A-Z]+\d+:([A-Z]+)(\d+)$/);
+      return { s:{r:0,c:0}, e:{r:Number(match?.[2]||1)-1,c:excelColumnIndex(match?.[1]||"A")} };
+    },
+    book_new() { return { SheetNames:[], Sheets:{} }; },
+    book_append_sheet(workbook,sheet,name) { workbook.SheetNames.push(name); workbook.Sheets[name]=sheet; }
+  },
+  writeFile(workbook,filename) { exportCapture.workbook=workbook; exportCapture.filename=filename; }
+};
+const exportSandbox = {
+  window: { addEventListener(){}, location:{origin:"https://example.test",pathname:"/"} },
+  document: { getElementById(id){ return id==="statDate" ? {value:"2026-11"} : null; } },
+  localStorage: { getItem(){ return null; }, setItem(){} },
+  console: { log(){}, warn(){}, error(){}, table(){} },
+  alert(){},
+  fetch: async()=>({ok:true,async json(){return {value:[]};}}),
+  XLSX: exportXlsx
+};
+vm.runInNewContext(source,exportSandbox);
+const exportFixtures = [
+  {來源平台:"Outlook",日期:"2026-11-01",公司名稱:"一般網路客戶",Email:"client@example.com",聯絡人:"Contact",詢問內容:"報價",業務人員:"Alan"},
+  {來源平台:"LINE",日期:"2026-11-02",公司名稱:"LINE客戶",Email:"line@example.com",產品型號:"SD-10",聯絡人:"Line User",詢問內容:"詢問零件",產品型號:"SD-10"},
+  {來源平台:"Outlook",日期:"2026-11-03",公司名稱:"外貿公用",Email:" OVERSEAS@QUICK-GLOBAL.COM ",聯絡人:"Shared",詢問內容:"一般往來"},
+  {來源平台:"Outlook",日期:"2026-11-04",公司名稱:"其他外部地址",Email:"office.wm@quick-global.com",聯絡人:"Office",詢問內容:"客戶詢問"},
+  {來源平台:"Outlook",日期:"2026-11-05",公司名稱:"手動新增網路客戶",Email:"manual@example.com",聯絡人:"Manual",詢問內容:"詢價",來源郵件:"手動新增"}
+];
+exportSandbox.__exportFixtures = exportFixtures;
+vm.runInNewContext("state.rows=__exportFixtures; exportExcel();",exportSandbox);
+const workbook = exportCapture.workbook;
+assert(workbook && exportCapture.filename === "網路客戶統計_2026-11.xlsx", "Excel 匯出未產生預期檔案");
+assert(JSON.stringify(Array.from(workbook.SheetNames)) === JSON.stringify(["網路客戶","LINE客戶","月份統計"]), "Excel 分頁名稱或順序錯誤");
+const networkSheetData = workbook.Sheets["網路客戶"]["!data"];
+const lineSheetData = workbook.Sheets["LINE客戶"]["!data"];
+const summarySheetData = workbook.Sheets["月份統計"]["!data"];
+assert(networkSheetData.length === 4, "網路客戶分頁未正確排除外貿公用 Email 或遺漏其他來源");
+assert(!networkSheetData.some(row => String(row?.[3]||"").trim().toLowerCase() === "overseas@quick-global.com"), "外貿公用 Email 仍出現在網路客戶分頁");
+assert(networkSheetData.some(row => row?.[3] === "office.wm@quick-global.com"), "非指定地址不應被排除");
+assert(lineSheetData.length === 2 && lineSheetData[1][1] === "SD-10", "LINE 分頁資料或原有分析欄位遺失");
+assert(!networkSheetData.slice(1).some(row => row?.[0] === lineSheetData[1]?.[0] && row?.[1] === lineSheetData[1]?.[1] && row?.[2] === lineSheetData[1]?.[2]), "LINE 資料重複出現在網路客戶分頁");
+assert(summarySheetData.some(row => row?.[0] === "網路客戶數" && row?.[1] === 3), "月統計網路客戶筆數不符");
+assert(summarySheetData.some(row => row?.[0] === "LINE客戶數" && row?.[1] === 1), "月統計 LINE 客戶筆數不符");
+assert(summarySheetData.some(row => row?.[0] === "全部客戶詢問總數" && row?.[1] === 4), "月統計總數沒有與匯出分頁對齊");
+exportSandbox.__exportFixtures = [{來源平台:"LINE",日期:"2026-11-06",Email:"line-only@example.com",產品型號:"Q1"}];
+vm.runInNewContext("state.rows=__exportFixtures; exportExcel();",exportSandbox);
+assert(exportCapture.workbook.Sheets["網路客戶"]["!data"].length === 1, "沒有網路客戶時未保留空白表頭分頁");
+assert(exportCapture.workbook.Sheets["LINE客戶"]["!data"].length === 2, "LINE 單一來源資料遺失");
+exportSandbox.__exportFixtures = [{來源平台:"Outlook",日期:"2026-11-07",Email:"overseas@quick-global.com"}];
+vm.runInNewContext("state.rows=__exportFixtures; exportExcel();",exportSandbox);
+assert(exportCapture.workbook.Sheets["網路客戶"]["!data"].length === 1, "網路明細全被排除時未保留空白表頭分頁");
+assert(exportCapture.workbook.Sheets["LINE客戶"]["!data"].length === 1, "沒有 LINE 客戶時未保留空白表頭分頁");
+
+console.log("OUTLOOK_AND_LINE_AND_EXCEL_REGRESSION_PASS");

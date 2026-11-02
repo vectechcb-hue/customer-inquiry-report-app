@@ -5,14 +5,15 @@ const CLIENT_ID = "3b26a125-74f9-4ee5-a412-0a175899b7b2";
 const AUTHORITY = "https://login.microsoftonline.com/consumers";
 const SCOPES = ["User.Read", "Mail.Read"];
 const TARGET_MAILBOX = ["cbtrade0411","outlook.com"].join("@");
+const EXCLUDED_NETWORK_CUSTOMER_EMAILS = new Set(["overseas@quick-global.com"]);
 // Microsoft Graph 的「收件匣」固定使用 well-known folder ID：inbox；這不是另一個郵件來源。
 const MAIL_FOLDER_ID = "inbox";
 const MANUAL_KEY = "vectech_manual_customer_rows_v2";
 const LINE_API_KEY = "vectech_line_api_url_v1";
 const LINE_READ_KEY = "vectech_line_read_key_v1";
 const AUTO_SCAN_KEY="vectech_auto_scan_after_login_v1";
-const APP_VERSION="v68";
-const CACHE_VERSION="v68";
+const APP_VERSION="v69";
+const CACHE_VERSION="v69";
 const TAIPEI_OFFSET_MS=8*60*60*1000;
 
 let msalAppInstance = null;
@@ -1466,6 +1467,8 @@ function summarySheet(rows){
   const won = rows.filter(r => r.是否成交 === "是").length;
   const amount = rows.reduce((s,r) => s + (Number(r.成交金額) || 0), 0);
   const blank = rows.filter(r => !r.是否成交).length;
+  const lineCount = rows.filter(r => safeText(r.來源平台).toUpperCase() === "LINE").length;
+  const networkCount = rows.length - lineCount;
   const sales = new Map();
   const dates = new Map();
   const platforms = new Map();
@@ -1477,7 +1480,9 @@ function summarySheet(rows){
   const data = [
     [ym],[],
     ["統計項目","數量 / 金額","","業務人員","詢問件數","","日期","詢問件數"],
-    ["網路客戶詢問總數",rows.length,"","",0,"","",0],
+    ["網路客戶數",networkCount,"","",0,"","",0],
+    ["LINE客戶數",lineCount,"","","","","",""],
+    ["全部客戶詢問總數",rows.length,"","","","","",""],
     ["已成交件數",won,"","","","","",""],
     ["成交總金額",amount,"","","","","",""],
     ["尚未填寫成交狀態",blank,"","","","","",""]
@@ -1487,8 +1492,10 @@ function summarySheet(rows){
   const dEntries=[...dates.entries()].sort((a,b)=>a[0].localeCompare(b[0]));
   dEntries.forEach(([d,v],i)=>{ const rr=3+i; if(!data[rr]) data[rr]=["","","","","","","",""]; data[rr][6]=d; data[rr][7]=v; });
   const pEntries=[...platforms.entries()];
-  pEntries.forEach(([p,v],i)=>{ const rr=3+i; if(!data[rr]) data[rr]=["","","","","","","",""]; data[rr][0]="來源平台："+p; data[rr][1]=v; });
-  data.push(["說明","保留原始 Excel 八欄明細格式；系統內部另外記錄來源平台，可在月份統計中查看 Outlook 與 LINE 的件數。"]);
+  const platformStart=Math.max(data.length,3+entries.length,3+dEntries.length)+1;
+  while(data.length<platformStart) data.push(["","","","","","","",""]);
+  pEntries.forEach(([p,v],i)=>{ data[platformStart+i]=["來源平台："+p,v,"","","","","",""]; });
+  data.push(["說明","網路客戶與 LINE 客戶分頁統計；網路客戶已排除客戶 Email 為 overseas@quick-global.com 的資料。"]);
   const ws = XLSX.utils.aoa_to_sheet(data);
   ws["!merges"] = [{s:{c:0,r:0},e:{c:7,r:0}}];
   ws["!cols"] = [{wch:28},{wch:18},{wch:4},{wch:18},{wch:12},{wch:4},{wch:14},{wch:12}];
@@ -1508,25 +1515,31 @@ function summarySheet(rows){
   }
   return ws;
 }
+function lineCustomerSheet(lineRows){
+  const data = [["日期","產品／型號","公司名稱","公司地址","Email","電話","聯絡人","客戶類型","分析等級","對話訊息數","含圖片","詢問內容"],
+    ...lineRows.map(r => [r.日期||"",r.產品型號||"",r.公司名稱||"",r.公司地址||"",r.Email||"",r.電話||"",r.聯絡人||"",r.客戶類型||"",r.LINE分析等級||"",r.對話訊息數||"",r.含圖片||"",r.詢問內容||""])];
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  ws["!cols"] = [{wch:12},{wch:24},{wch:24},{wch:34},{wch:30},{wch:18},{wch:18},{wch:16},{wch:18},{wch:12},{wch:10},{wch:60}];
+  ws["!rows"] = [{hpt:24}, ...lineRows.map(r=>({hpt:Math.min(210,Math.max(48,42+Math.ceil((r.詢問內容||"").length/55)*18))}))];
+  ws["!autofilter"] = {ref:"A1:L"+data.length};
+  for(let rr=0;rr<data.length;rr++) for(let cc=0;cc<12;cc++){
+    const cell=ws[XLSX.utils.encode_cell({r:rr,c:cc})]; if(!cell) continue;
+    cell.s={font:{name:"Microsoft JhengHei",bold:rr===0,color:rr===0?{rgb:"FFFFFF"}:undefined},fill:rr===0?{fgColor:{rgb:"4472C4"}}:undefined,alignment:{vertical:"top",wrap_text:true},border:{top:{style:"thin",color:{rgb:"D5DDE3"}},bottom:{style:"thin",color:{rgb:"D5DDE3"}},left:{style:"thin",color:{rgb:"D5DDE3"}},right:{style:"thin",color:{rgb:"D5DDE3"}}}};
+  }
+  return ws;
+}
 function exportExcel(){
   if (!state.rows.length) { alert("目前沒有資料可匯出"); return; }
+  const lineRows = state.rows.filter(r => safeText(r.來源平台).toUpperCase() === "LINE");
+  const networkRows = state.rows.filter(r =>
+    safeText(r.來源平台 || "Outlook").toUpperCase() !== "LINE" &&
+    !EXCLUDED_NETWORK_CUSTOMER_EMAILS.has(safeText(r.Email).toLowerCase())
+  );
+  const exportRows = [...networkRows,...lineRows];
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, xlsxSheet(state.rows), "網路客戶明細");
-  XLSX.utils.book_append_sheet(wb, summarySheet(state.rows), "月份統計");
-  const lineRows = state.rows.filter(r => (r.來源平台 || "") === "LINE");
-  if (lineRows.length) {
-    const data = [["日期","產品／型號","公司名稱","公司地址","Email","電話","聯絡人","客戶類型","分析等級","對話訊息數","含圖片","詢問內容"],
-      ...lineRows.map(r => [r.日期||"",r.產品型號||"",r.公司名稱||"",r.公司地址||"",r.Email||"",r.電話||"",r.聯絡人||"",r.客戶類型||"",r.LINE分析等級||"",r.對話訊息數||"",r.含圖片||"",r.詢問內容||""])];
-    const ws = XLSX.utils.aoa_to_sheet(data);
-    ws["!cols"] = [{wch:12},{wch:24},{wch:24},{wch:34},{wch:30},{wch:18},{wch:18},{wch:16},{wch:18},{wch:12},{wch:10},{wch:60}];
-    ws["!rows"] = [{hpt:24}, ...lineRows.map(r=>({hpt:Math.min(210,Math.max(48,42+Math.ceil((r.詢問內容||"").length/55)*18))}))];
-    ws["!autofilter"] = {ref:"A1:L"+data.length};
-    for(let rr=0;rr<data.length;rr++) for(let cc=0;cc<12;cc++){
-      const cell=ws[XLSX.utils.encode_cell({r:rr,c:cc})]; if(!cell) continue;
-      cell.s={font:{name:"Microsoft JhengHei",bold:rr===0,color:rr===0?{rgb:"FFFFFF"}:undefined},fill:rr===0?{fgColor:{rgb:"4472C4"}}:undefined,alignment:{vertical:"top",wrap_text:true},border:{top:{style:"thin",color:{rgb:"D5DDE3"}},bottom:{style:"thin",color:{rgb:"D5DDE3"}},left:{style:"thin",color:{rgb:"D5DDE3"}},right:{style:"thin",color:{rgb:"D5DDE3"}}}};
-    }
-    XLSX.utils.book_append_sheet(wb, ws, "LINE客戶分析");
-  }
+  XLSX.utils.book_append_sheet(wb, xlsxSheet(networkRows), "網路客戶");
+  XLSX.utils.book_append_sheet(wb, lineCustomerSheet(lineRows), "LINE客戶");
+  XLSX.utils.book_append_sheet(wb, summarySheet(exportRows), "月份統計");
   const ym = getStatYM();
   const fn = "網路客戶統計_" + ym + ".xlsx";
   XLSX.writeFile(wb, fn, {compression:true});
